@@ -4,15 +4,12 @@ import { colors } from './colors';
 import { fonts } from './typography';
 
 /** Logotipo oficial do Instituto Vitality — figura dourada (sem fundo). */
-const LOGO_INSTITUTO = 'https://candid-profiterole-f01152.netlify.app/privacidade/logo.png';
-const LOGO_TENNER = 'https://candid-profiterole-f01152.netlify.app/icon-512.png';
-
 export function Monogram({ size = 40 }: { size?: number }) {
   // A figura tem proporção ~440x592 (retrato). Mantemos a altura = size.
   const w = Math.round(size * (440 / 592));
   return (
     <Image
-      source={{ uri: LOGO_INSTITUTO }}
+      source={require('./logo_instituto.png')}
       style={{ width: w, height: size, resizeMode: 'contain' }}
       accessibilityLabel="Instituto Vitality"
     />
@@ -24,7 +21,7 @@ export function TennerMark({ size = 40 }: { size?: number }) {
   const w = Math.round(size * (198 / 236));
   return (
     <Image
-      source={{ uri: LOGO_TENNER }}
+      source={require('./logo_tenner.png')}
       style={{ width: w, height: size, resizeMode: 'contain' }}
       accessibilityLabel="Dr. Tenner Nunes"
     />

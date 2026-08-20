@@ -60,9 +60,49 @@ export async function getMealsToday(ctx: Ctx, patientId?: string): Promise<Meal[
   return (data as Meal[]) ?? [];
 }
 
-export async function addMeal(ctx: Ctx, meal: Omit<Meal, 'id' | 'logged_at'>): Promise<void> {
-  if (!isReal(ctx)) return;
-  await supabase.from('meals').insert({ patient_id: ctx.patientId, ...meal });
+export async function addMeal(ctx: Ctx, meal: Omit<Meal, 'id' | 'logged_at'>): Promise<{ error?: string }> {
+  if (!isReal(ctx)) return {};
+  const { error } = await supabase.from('meals').insert({ patient_id: ctx.patientId, ...meal });
+  return { error: error?.message };
+}
+
+export async function deleteMeal(ctx: Ctx, id: string): Promise<{ error?: string }> {
+  if (!isReal(ctx)) return {};
+  const { error } = await supabase.from('meals').delete().eq('id', id).eq('patient_id', ctx.patientId);
+  return { error: error?.message };
+}
+
+export async function clearMealsToday(ctx: Ctx): Promise<{ error?: string }> {
+  if (!isReal(ctx)) return {};
+  const { error } = await supabase
+    .from('meals')
+    .delete()
+    .eq('patient_id', ctx.patientId)
+    .gte('logged_at', startOfToday());
+  return { error: error?.message };
+}
+
+/** Estimativa de kcal + macros por IA (Edge Function segura). */
+export interface CalorieEstimate {
+  refeicao: string;
+  itens: { nome: string; porcao: string; kcal: number; prot: number; carb: number; gord: number }[];
+  total_kcal: number; total_prot: number; total_carb: number; total_gord: number;
+  confianca: 'alta' | 'media' | 'baixa';
+  observacao: string;
+}
+export async function estimateCalories(
+  ctx: Ctx,
+  input: { text?: string; imageBase64?: string; note?: string }
+): Promise<{ data?: CalorieEstimate; error?: string }> {
+  if (!supabaseConfigured || ctx.demo) return { error: 'Disponível apenas em conta real.' };
+  const { data, error } = await supabase.functions.invoke('estimate-calories', { body: input });
+  if (error) {
+    let msg = error.message;
+    try { const j = await (error as any).context?.json?.(); if (j?.error) msg = j.error; } catch {}
+    return { error: msg };
+  }
+  if ((data as any)?.error) return { error: (data as any).error };
+  return { data: data as CalorieEstimate };
 }
 
 // ------------------------- PESO -------------------------

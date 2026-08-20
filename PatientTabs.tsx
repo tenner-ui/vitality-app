@@ -7,6 +7,7 @@ import { fonts } from './typography';
 import { FluidTabBar } from './FluidTabBar';
 import { HomeScreen } from './HomeScreen';
 import { NutritionScreen } from './NutritionScreen';
+import { CaloriesScreen } from './CaloriesScreen';
 import { SaudeScreen } from './SaudeScreen';
 import { CardioScreen } from './CardioScreen';
 import { CommunityScreen } from './CommunityScreen';
@@ -19,6 +20,7 @@ const Tab = createBottomTabNavigator();
 const icons: Record<string, keyof typeof Ionicons.glyphMap> = {
   Início: 'home',
   Nutrição: 'restaurant',
+  Calorias: 'flame',
   Saúde: 'pulse',
   Cardio: 'heart',
   Comunidade: 'people',
@@ -35,6 +37,7 @@ export function PatientTabs() {
     >
       <Tab.Screen name="Início" component={HomeScreen} />
       <Tab.Screen name="Nutrição" component={NutritionScreen} />
+      <Tab.Screen name="Calorias" component={CaloriesScreen} />
       <Tab.Screen name="Saúde" component={SaudeScreen} />
       <Tab.Screen name="Cardio" component={CardioScreen} />
       <Tab.Screen name="Comunidade" component={CommunityScreen} />
