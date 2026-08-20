@@ -47,12 +47,13 @@ export function LoginScreen({ navigation }: Props) {
         </View>
 
         <Card glow>
-          <Text style={styles.label}>E-mail</Text>
+          <Text style={styles.label}>Login (primeiro nome) ou e-mail</Text>
           <TextInput
             style={styles.input}
-            placeholder="voce@email.com"
+            placeholder="ex.: seu primeiro nome"
             placeholderTextColor={colors.textMuted}
             autoCapitalize="none"
+            autoCorrect={false}
             keyboardType="email-address"
             value={email}
             onChangeText={setEmail}
@@ -73,7 +74,8 @@ export function LoginScreen({ navigation }: Props) {
             </Text>
           </Pressable>
           <Text style={styles.helper}>
-            Após o cadastro, confirme seu e-mail. O acesso é liberado pelo Dr. Tenner.
+            Pacientes do Instituto: entre com o primeiro nome e a data de nascimento
+            (DDMMAAAA). No primeiro acesso você define uma nova senha.
           </Text>
         </Card>
 

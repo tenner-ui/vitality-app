@@ -15,18 +15,31 @@ interface AuthState {
   active: boolean;
   isTeam: boolean;
   isLeader: boolean;
+  mustChangePassword: boolean;
   viewAs: 'team' | 'patient';
   setViewAs: (v: 'team' | 'patient') => void;
   teamLens: 'all' | Role;
   setTeamLens: (v: 'all' | Role) => void;
   signIn: (email: string, password: string) => Promise<{ error?: string }>;
   signUp: (email: string, password: string, fullName: string, cpf?: string) => Promise<{ error?: string }>;
+  changePassword: (newPassword: string) => Promise<{ error?: string }>;
   enterDemo: (role?: Role) => void;
   signOut: () => Promise<void>;
   refreshProfile: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthState | undefined>(undefined);
+
+/** Converte "primeiro nome" em e-mail sintético; mantém e-mails reais como estão. */
+function toLoginEmail(input: string): string {
+  const v = input.trim().toLowerCase();
+  if (v.includes('@')) return v;
+  const slug = v
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]/g, '');
+  return `${slug}@vitality.local`;
+}
 
 const teamRoles: Role[] = ['medico', 'nutricionista', 'psicologa', 'educador_fisico', 'lider'];
 
@@ -37,6 +50,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [displayName, setDisplayName] = useState('Paciente');
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
   const [active, setActive] = useState(false);
+  const [mustChange, setMustChange] = useState(false);
   const [loading, setLoading] = useState(true);
   const [viewAs, setViewAs] = useState<'team' | 'patient'>('team');
   const [teamLens, setTeamLens] = useState<'all' | Role>('all');
@@ -61,7 +75,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   async function loadProfile(userId: string) {
     const { data } = await supabase
       .from('profiles')
-      .select('full_name, role, avatar_url, active')
+      .select('full_name, role, avatar_url, active, must_change_password')
       .eq('id', userId)
       .maybeSingle();
     if (data) {
@@ -69,6 +83,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setDisplayName(data.full_name || 'Paciente');
       setAvatarUrl((data as any).avatar_url ?? null);
       setActive(!!(data as any).active);
+      setMustChange(!!(data as any).must_change_password);
     }
   }
 
@@ -93,14 +108,27 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       active: demo ? true : preview ? true : active,
       isTeam: teamUser,
       isLeader: role === 'lider',
+      mustChangePassword: !demo && mustChange,
       viewAs,
       setViewAs,
       teamLens,
       setTeamLens,
       refreshProfile,
       async signIn(email, password) {
-        const { error } = await supabase.auth.signInWithPassword({ email, password });
+        const { error } = await supabase.auth.signInWithPassword({
+          email: toLoginEmail(email),
+          password,
+        });
         return { error: error?.message };
+      },
+      async changePassword(newPassword) {
+        const { error } = await supabase.auth.updateUser({ password: newPassword });
+        if (error) return { error: error.message };
+        if (session?.user) {
+          await supabase.from('profiles').update({ must_change_password: false }).eq('id', session.user.id);
+          setMustChange(false);
+        }
+        return {};
       },
       async signUp(email, password, fullName, cpf) {
         const { error } = await supabase.auth.signUp({
@@ -131,6 +159,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setDemo(false);
         setRole('paciente');
         setActive(false);
+        setMustChange(false);
         setAvatarUrl(null);
         setViewAs('team');
         setTeamLens('all');
@@ -138,7 +167,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setSession(null);
       },
     };
-  }, [session, role, demo, loading, displayName, avatarUrl, active, viewAs, teamLens]);
+  }, [session, role, demo, loading, displayName, avatarUrl, active, mustChange, viewAs, teamLens]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

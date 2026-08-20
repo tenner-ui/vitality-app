@@ -5,6 +5,7 @@ import { useAuth } from './AuthContext';
 import { LoginScreen } from './LoginScreen';
 import { SignupScreen } from './SignupScreen';
 import { ConsentScreen } from './ConsentScreen';
+import { ChangePasswordScreen } from './ChangePasswordScreen';
 import { PatientNavigator } from './PatientNavigator';
 import { PendingScreen } from './PendingScreen';
 import { TeamNavigator } from './TeamNavigator';
@@ -17,19 +18,22 @@ export type RootStackParams = {
   Patient: undefined;
   Pending: undefined;
   Team: undefined;
+  ChangePassword: undefined;
 };
 
 const Stack = createNativeStackNavigator<RootStackParams>();
 
 export function RootNavigator() {
-  const { session, demo, isTeam, active, viewAs } = useAuth();
+  const { session, demo, isTeam, active, viewAs, mustChangePassword } = useAuth();
   const authed = !!session || demo;
 
   return (
     <View style={{ flex: 1 }}>
       <Stack.Navigator screenOptions={{ headerShown: false, animation: 'fade' }}>
         {authed ? (
-          isTeam ? (
+          mustChangePassword ? (
+            <Stack.Screen name="ChangePassword" component={ChangePasswordScreen} />
+          ) : isTeam ? (
             viewAs === 'patient' ? (
               <Stack.Screen name="Patient" component={PatientNavigator} />
             ) : (
