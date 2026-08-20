@@ -1,0 +1,57 @@
+{
+  "expo": {
+    "name": "VITALITY",
+    "slug": "vitality-instituto",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./ph.png",
+    "scheme": "vitality",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "image": "./ph.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#F4F2EA"
+    },
+    "assetBundlePatterns": ["**/*"],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "br.com.institutovitality.app",
+      "infoPlist": {
+        "NSCameraUsageDescription": "O VITALITY usa a câmera para fotografar refeições e registrar fotos de evolução corporal.",
+        "NSPhotoLibraryUsageDescription": "O VITALITY acessa suas fotos para registrar a evolução corporal."
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./src/assets/icon.png",
+        "backgroundColor": "#0D1F3F"
+      },
+      "package": "br.com.institutovitality.app",
+      "permissions": ["CAMERA", "NOTIFICATIONS"]
+    },
+    "web": {
+      "bundler": "metro",
+      "output": "single",
+      "favicon": "./src/assets/icon.png"
+    },
+    "plugins": [
+      [
+        "expo-notifications",
+        {
+          "color": "#C8A24A"
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "O VITALITY acessa suas fotos para registrar exames e a evolução corporal."
+        }
+      ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "caae67f3-8b04-48ef-86a8-639f2be8563d"
+      }
+    }
+  }
+}
