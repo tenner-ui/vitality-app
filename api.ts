@@ -60,10 +60,56 @@ export async function getMealsToday(ctx: Ctx, patientId?: string): Promise<Meal[
   return (data as Meal[]) ?? [];
 }
 
-export async function addMeal(ctx: Ctx, meal: Omit<Meal, 'id' | 'logged_at'>): Promise<{ error?: string }> {
+export async function addMeal(ctx: Ctx, meal: Record<string, any>): Promise<{ error?: string }> {
   if (!isReal(ctx)) return {};
   const { error } = await supabase.from('meals').insert({ patient_id: ctx.patientId, ...meal });
   return { error: error?.message };
+}
+
+/** Dias (YYYY-MM-DD) que possuem refeições registradas — para resgatar histórico. */
+export async function getMealDays(ctx: Ctx): Promise<string[]> {
+  if (!isReal(ctx)) return [];
+  const { data } = await supabase
+    .from('meals')
+    .select('logged_at')
+    .eq('patient_id', ctx.patientId)
+    .order('logged_at', { ascending: false })
+    .limit(600);
+  const set = new Set<string>();
+  for (const r of data ?? []) set.add(String((r as any).logged_at).slice(0, 10));
+  return Array.from(set);
+}
+
+/** Refeições de um dia específico (YYYY-MM-DD, hora local). */
+export async function getMealsByDate(ctx: Ctx, dayISO: string): Promise<Meal[]> {
+  if (!isReal(ctx)) return [];
+  const start = new Date(dayISO + 'T00:00:00');
+  const end = new Date(dayISO + 'T23:59:59.999');
+  const { data } = await supabase
+    .from('meals')
+    .select('*')
+    .eq('patient_id', ctx.patientId)
+    .gte('logged_at', start.toISOString())
+    .lte('logged_at', end.toISOString())
+    .order('logged_at', { ascending: true });
+  return (data as Meal[]) ?? [];
+}
+
+/**
+ * Meta diária de calorias — importada da bioimpedância (TMB da última medição).
+ * A equipe pode sobrescrever em patient_goals.calorie_override. Não é editável pelo paciente.
+ */
+export async function getCalorieGoal(ctx: Ctx): Promise<{ kcal: number; source: string }> {
+  if (!isReal(ctx)) return { kcal: 2000, source: 'padrão' };
+  const [{ data: g }, { data: bio }] = await Promise.all([
+    supabase.from('patient_goals').select('calorie_override').eq('id', ctx.patientId).maybeSingle(),
+    supabase.from('bioimpedance').select('bmr_kcal, measured_at').eq('patient_id', ctx.patientId).order('measured_at', { ascending: false }).limit(1),
+  ]);
+  const override = (g as any)?.calorie_override;
+  if (override && Number(override) > 0) return { kcal: Math.round(Number(override)), source: 'ajuste da equipe' };
+  const bmr = bio && bio[0] ? Number((bio[0] as any).bmr_kcal) : 0;
+  if (bmr > 0) return { kcal: Math.round(bmr), source: 'bioimpedância (TMB)' };
+  return { kcal: 2000, source: 'padrão' };
 }
 
 export async function deleteMeal(ctx: Ctx, id: string): Promise<{ error?: string }> {
@@ -198,12 +244,13 @@ export async function addPhoto(ctx: Ctx, path: string, pose?: string): Promise<v
   await supabase.from('photos').insert({ patient_id: ctx.patientId, url: path, pose });
 }
 
-export async function getPhotos(ctx: Ctx): Promise<{ id: string; url: string; taken_at: string }[]> {
-  if (!isReal(ctx)) return [];
+export async function getPhotos(ctx: Ctx, patientId?: string): Promise<{ id: string; url: string; pose: string | null; taken_at: string }[]> {
+  const pid = patientId ?? ctx.patientId;
+  if (!supabaseConfigured || ctx.demo || !pid || pid === 'demo') return [];
   const { data } = await supabase
     .from('photos')
-    .select('id, url, taken_at')
-    .eq('patient_id', ctx.patientId)
+    .select('id, url, pose, taken_at')
+    .eq('patient_id', pid)
     .order('taken_at', { ascending: true });
   return (data as any) ?? [];
 }
@@ -295,6 +342,167 @@ export async function getMealPhotos(ctx: Ctx): Promise<{ id: string; title: stri
     .not('photo_url', 'is', null)
     .order('logged_at', { ascending: false });
   return (data ?? []).map((m: any) => ({ id: m.id, title: m.title, path: m.photo_url, logged_at: m.logged_at }));
+}
+
+// ------------------------- MURAL DA NUTRI (dicas) -------------------------
+export interface NutriTip {
+  id: string; body: string; media_url: string | null; scope: 'diaria' | 'semanal';
+  author_name: string | null; author_role: string | null; created_at: string;
+}
+export async function getNutriTips(ctx: Ctx): Promise<NutriTip[]> {
+  if (!supabaseConfigured || ctx.demo) return (mock as any).nutriTipsDemo ?? [];
+  const { data } = await supabase
+    .from('nutri_tips')
+    .select('id, body, media_url, scope, author_name, author_role, created_at')
+    .eq('active', true)
+    .order('created_at', { ascending: false })
+    .limit(60);
+  return (data as any) ?? [];
+}
+export async function addNutriTip(
+  ctx: Ctx,
+  input: { body: string; scope: 'diaria' | 'semanal'; media_url?: string | null; author_name?: string; author_role?: string }
+): Promise<{ error?: string }> {
+  if (!supabaseConfigured || ctx.demo) return {};
+  const { data: u } = await supabase.auth.getUser();
+  const { error } = await supabase.from('nutri_tips').insert({
+    body: input.body, scope: input.scope, media_url: input.media_url ?? null,
+    created_by: u.user?.id, author_name: input.author_name ?? 'Nutrição', author_role: input.author_role ?? 'nutricionista',
+  });
+  return { error: error?.message };
+}
+export async function deleteNutriTip(ctx: Ctx, id: string): Promise<{ error?: string }> {
+  if (!supabaseConfigured || ctx.demo) return {};
+  const { error } = await supabase.from('nutri_tips').update({ active: false }).eq('id', id);
+  return { error: error?.message };
+}
+
+// ------------------------- CARDÁPIO (PDF) -------------------------
+export interface MealPlan { id: string; patient_id: string | null; title: string; pdf_path: string; created_at: string; }
+export async function getMealPlans(ctx: Ctx, patientId?: string): Promise<MealPlan[]> {
+  const pid = patientId ?? ctx.patientId;
+  if (!supabaseConfigured || ctx.demo || !pid || pid === 'demo') return [];
+  // Individuais do paciente + gerais (patient_id null)
+  const { data } = await supabase
+    .from('meal_plans')
+    .select('id, patient_id, title, pdf_path, created_at')
+    .or(`patient_id.eq.${pid},patient_id.is.null`)
+    .order('created_at', { ascending: false });
+  return (data as any) ?? [];
+}
+export async function addMealPlan(
+  ctx: Ctx,
+  input: { patient_id?: string | null; title: string; pdf_path: string }
+): Promise<{ error?: string }> {
+  if (!supabaseConfigured || ctx.demo) return {};
+  const { data: u } = await supabase.auth.getUser();
+  const { error } = await supabase.from('meal_plans').insert({
+    patient_id: input.patient_id ?? null, title: input.title, pdf_path: input.pdf_path, created_by: u.user?.id,
+  });
+  return { error: error?.message };
+}
+
+// ------------------------- NUTRI: FOTOS ENVIADAS PELOS PACIENTES -------------------------
+export interface NutriFeedItem { id: string; patient_id: string; patient_name: string; title: string; path: string; calories: number; logged_at: string; }
+export async function getNutriFeed(ctx: Ctx): Promise<NutriFeedItem[]> {
+  if (!supabaseConfigured || ctx.demo) return [];
+  const { data } = await supabase
+    .from('meals')
+    .select('id, patient_id, title, photo_url, calories, logged_at')
+    .eq('sent_to_nutri', true)
+    .not('photo_url', 'is', null)
+    .order('logged_at', { ascending: false })
+    .limit(60);
+  const rows = data ?? [];
+  const ids = Array.from(new Set(rows.map((r: any) => r.patient_id)));
+  const { data: profs } = await supabase.from('profiles').select('id, full_name').in('id', ids.length ? ids : ['00000000-0000-0000-0000-000000000000']);
+  const nameById: Record<string, string> = {};
+  for (const p of profs ?? []) nameById[(p as any).id] = (p as any).full_name;
+  return rows.map((m: any) => ({
+    id: m.id, patient_id: m.patient_id, patient_name: nameById[m.patient_id] ?? 'Paciente',
+    title: m.title, path: m.photo_url, calories: m.calories, logged_at: m.logged_at,
+  }));
+}
+
+// ------------------------- METAS ESCALÁVEIS -------------------------
+export interface PatientGoals { water_ml_goal: number; steps_goal: number; calorie_override: number | null; }
+export async function getPatientGoals(ctx: Ctx, patientId?: string): Promise<PatientGoals> {
+  const pid = patientId ?? ctx.patientId;
+  const def: PatientGoals = { water_ml_goal: 2500, steps_goal: 8000, calorie_override: null };
+  if (!supabaseConfigured || ctx.demo || !pid || pid === 'demo') return def;
+  const { data } = await supabase.from('patient_goals').select('water_ml_goal, steps_goal, calorie_override').eq('id', pid).maybeSingle();
+  return (data as any) ?? def;
+}
+export async function savePatientGoals(
+  ctx: Ctx, patientId: string, input: { water_ml_goal?: number; steps_goal?: number; calorie_override?: number | null }
+): Promise<{ error?: string }> {
+  if (!supabaseConfigured || ctx.demo) return {};
+  const { data: u } = await supabase.auth.getUser();
+  const { error } = await supabase.from('patient_goals').upsert({ id: patientId, ...input, updated_by: u.user?.id, updated_at: new Date().toISOString() });
+  return { error: error?.message };
+}
+
+// ------------------------- CONQUISTAS -------------------------
+export interface Achievement { id: string; kind: string; title: string | null; awarded_at: string; meta: any; }
+export async function getAchievements(ctx: Ctx, patientId?: string): Promise<Achievement[]> {
+  const pid = patientId ?? ctx.patientId;
+  if (!supabaseConfigured || ctx.demo || !pid || pid === 'demo') return [];
+  const { data } = await supabase.from('achievements').select('id, kind, title, awarded_at, meta').eq('patient_id', pid).order('awarded_at', { ascending: false });
+  return (data as any) ?? [];
+}
+export async function awardAchievement(
+  ctx: Ctx, input: { kind: string; title: string; meta?: any }
+): Promise<{ awarded: boolean; error?: string }> {
+  if (!isReal(ctx)) return { awarded: false };
+  const { error } = await supabase.from('achievements').insert({ patient_id: ctx.patientId, kind: input.kind, title: input.title, meta: input.meta ?? {} });
+  if (error) {
+    if ((error as any).code === '23505') return { awarded: false }; // já conquistado
+    return { awarded: false, error: error.message };
+  }
+  return { awarded: true };
+}
+
+// ------------------------- STREAK / CONSTÂNCIA -------------------------
+/**
+ * Constância diária dos últimos `days` dias: um dia é "completo" quando o paciente
+ * bateu a meta de água E registrou ao menos uma refeição. Retorna o streak atual
+ * (dias consecutivos completos terminando hoje) e o mapa por dia.
+ */
+export async function getStreakInfo(ctx: Ctx, days = 30): Promise<{ streak: number; completeCount: number; goalHit: boolean }> {
+  if (!isReal(ctx)) return { streak: 0, completeCount: 0, goalHit: false };
+  const since = daysAgoISO(days - 1);
+  const goals = await getPatientGoals(ctx);
+  const waterGoal = goals.water_ml_goal || 2500;
+  const [w, m] = await Promise.all([
+    supabase.from('water_logs').select('amount_ml, logged_at').eq('patient_id', ctx.patientId).gte('logged_at', since),
+    supabase.from('meals').select('logged_at').eq('patient_id', ctx.patientId).gte('logged_at', since),
+  ]);
+  const waterByDay: Record<string, number> = {};
+  for (const r of w.data ?? []) {
+    const d = String((r as any).logged_at).slice(0, 10);
+    waterByDay[d] = (waterByDay[d] || 0) + Number((r as any).amount_ml);
+  }
+  const mealDays = new Set<string>();
+  for (const r of m.data ?? []) mealDays.add(String((r as any).logged_at).slice(0, 10));
+
+  const complete = (d: string) => (waterByDay[d] || 0) >= waterGoal && mealDays.has(d);
+  // conta streak a partir de hoje para trás
+  let streak = 0;
+  const day = new Date();
+  for (let i = 0; i < days; i++) {
+    const key = `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, '0')}-${String(day.getDate()).padStart(2, '0')}`;
+    if (complete(key)) streak++;
+    else break;
+    day.setDate(day.getDate() - 1);
+  }
+  let completeCount = 0;
+  const d2 = new Date();
+  for (let i = 0; i < days; i++) {
+    const key = `${d2.getFullYear()}-${String(d2.getMonth() + 1).padStart(2, '0')}-${String(d2.getDate()).padStart(2, '0')}`;
+    if (complete(key)) completeCount++;
+    d2.setDate(d2.getDate() - 1);
+  }
+  return { streak, completeCount, goalHit: streak >= days };
 }
 
 // ------------------------- PERFIL / AVATAR -------------------------

@@ -11,7 +11,7 @@ import { useAuth } from './AuthContext';
 import { roleMeta, appointmentMeta } from './helpers';
 import { AppointmentType } from './types';
 import * as api from './api';
-import { pickAndUpload } from './storage';
+import { pickAndUpload, pickAndUploadPdf } from './storage';
 import { TeamStackParams } from './TeamNavigator';
 
 function NumGrid({ fields, values, set }: { fields: [string, string][]; values: Record<string, string>; set: (k: string, v: string) => void }) {
@@ -379,28 +379,72 @@ function MedicoArea({ ctx, patientId }: { ctx: api.Ctx; patientId: string }) {
 // ---------------------------- NUTRICIONISTA ----------------------------
 function NutriArea({ ctx, patientId }: { ctx: api.Ctx; patientId: string }) {
   const [orient, setOrient] = useState('');
-  const [agua, setAgua] = useState('2.5');
-  const [kcal, setKcal] = useState('1600');
-  const [prot, setProt] = useState('130');
+  const [agua, setAgua] = useState('2500');
+  const [passos, setPassos] = useState('8000');
+  const [kcalOverride, setKcalOverride] = useState('');
+  const [savingGoals, setSavingGoals] = useState(false);
+  const [uploading, setUploading] = useState(false);
+
+  useEffect(() => {
+    api.getPatientGoals(ctx, patientId).then((g) => {
+      setAgua(String(g.water_ml_goal));
+      setPassos(String(g.steps_goal));
+      setKcalOverride(g.calorie_override ? String(g.calorie_override) : '');
+    }).catch(() => {});
+  }, [patientId]);
+
   async function enviar() {
     if (!orient.trim()) return;
-    const meta = `Metas: água ${agua} L/dia · ${kcal} kcal · ${prot} g de proteína. `;
-    await api.sendMessage(ctx, `Orientação nutricional: ${meta}${orient.trim()}`, 'nutricionista', patientId);
+    await api.sendMessage(ctx, `Orientação nutricional: ${orient.trim()}`, 'nutricionista', patientId);
     setOrient('');
-    notify('Enviado ✓', 'Orientação e metas enviadas ao paciente pelo chat.');
+    notify('Enviado ✓', 'Orientação enviada ao paciente pelo chat.');
   }
+  async function salvarMetas() {
+    setSavingGoals(true);
+    const { error } = await api.savePatientGoals(ctx, patientId, {
+      water_ml_goal: Number(agua) || 2500,
+      steps_goal: Number(passos) || 8000,
+      calorie_override: kcalOverride.trim() ? Number(kcalOverride) : null,
+    });
+    setSavingGoals(false);
+    if (error) return notify('Erro', error);
+    notify('Metas salvas ✓', 'As metas do paciente foram atualizadas.');
+  }
+  async function enviarCardapio() {
+    setUploading(true);
+    const r = await pickAndUploadPdf(patientId);
+    setUploading(false);
+    if (r.canceled) return;
+    if (r.error || !r.path) return notify('Cardápio', r.error || 'Falha no envio.');
+    const { error } = await api.addMealPlan(ctx, { patient_id: patientId, title: r.name || 'Cardápio', pdf_path: r.path });
+    if (error) return notify('Erro', error);
+    notify('Cardápio enviado ✓', 'Disponível para o paciente na aba Nutrição.');
+  }
+
   return (
     <>
-      <SectionLabel>Definir metas do plano</SectionLabel>
+      <SectionLabel>Metas escaláveis do paciente</SectionLabel>
       <Card glow>
-        <Text style={styles.fieldLabel}>Água (L) · Calorias (kcal) · Proteína (g)</Text>
+        <Text style={styles.fieldLabel}>Água (ml/dia) · Passos/dia</Text>
         <NumGrid
-          fields={[['agua', 'água L'], ['kcal', 'kcal'], ['prot', 'proteína g']]}
-          values={{ agua, kcal, prot }}
-          set={(k, v) => (k === 'agua' ? setAgua(v) : k === 'kcal' ? setKcal(v) : setProt(v))}
+          fields={[['agua', 'água ml'], ['passos', 'passos']]}
+          values={{ agua, passos }}
+          set={(k, v) => (k === 'agua' ? setAgua(v) : setPassos(v))}
         />
-        <Field label="Orientação ao paciente" value={orient} onChange={setOrient} placeholder="ex.: aumentar proteína no almoço" />
-        <GoldButton label="Enviar metas e orientação" onPress={enviar} />
+        <Field label="Meta calórica (opcional — vazio = usar TMB da bioimpedância)" value={kcalOverride} onChange={setKcalOverride} placeholder="deixe vazio para usar a bioimpedância" keyboard="numeric" />
+        <GoldButton label={savingGoals ? 'Salvando…' : 'Salvar metas'} onPress={salvarMetas} />
+      </Card>
+
+      <SectionLabel>Cardápio individual (PDF)</SectionLabel>
+      <Card>
+        <Text style={[styles.sub, { marginBottom: 10 }]}>Envie um cardápio em PDF exclusivo deste paciente. Ele aparece na aba Nutrição do app.</Text>
+        <GoldButton label={uploading ? 'Enviando…' : '📄  Enviar cardápio (PDF)'} outline onPress={enviarCardapio} />
+      </Card>
+
+      <SectionLabel>Orientação ao paciente</SectionLabel>
+      <Card glow>
+        <Field label="Mensagem" value={orient} onChange={setOrient} placeholder="ex.: aumentar proteína no almoço" />
+        <GoldButton label="Enviar orientação (chat)" onPress={enviar} />
       </Card>
     </>
   );

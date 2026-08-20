@@ -8,7 +8,7 @@ import { LineChart } from './LineChart';
 import { colors } from './colors';
 import { fonts, type } from './typography';
 import { useAuth } from './AuthContext';
-import { getBioSeries, getCardioReports, getLabResults, getPhotos } from './api';
+import { getBioSeries, getCardioReports, getLabResults, getPhotos, getStreakInfo } from './api';
 import { pickAndUpload, signedUrl } from './storage';
 import { addPhoto } from './api';
 import { achievements, weightTrend } from './mock';
@@ -39,51 +39,101 @@ export function SaudeScreen() {
 }
 
 // ------------------------------- CORPO -------------------------------
+const ANTES_MAX = 3;
+type PhotoRow = { id: string; url: string; pose: string | null; taken_at: string; signed?: string };
 function CorpoSection({ ctx }: { ctx: any }) {
-  const [photos, setPhotos] = useState<string[]>([]);
+  const [rows, setRows] = useState<PhotoRow[]>([]);
   const [bio, setBio] = useState<any[]>([]);
-  useEffect(() => {
-    (async () => {
-      const rows = await getPhotos(ctx).catch(() => []);
-      const urls = await Promise.all(rows.map((r) => signedUrl('body-photos', r.url)));
-      setPhotos(urls.filter(Boolean) as string[]);
-      setBio(await getBioSeries(ctx).catch(() => []));
-    })();
-  }, []);
+  const [busy, setBusy] = useState(false);
+  const [streak, setStreak] = useState(0);
+
+  async function reload() {
+    const raw = await getPhotos(ctx).catch(() => []);
+    const withUrls = await Promise.all(raw.map(async (r) => ({ ...r, signed: (await signedUrl('body-photos', r.url)) || undefined })));
+    setRows(withUrls.filter((r) => r.signed));
+    setBio(await getBioSeries(ctx).catch(() => []));
+    getStreakInfo(ctx, 30).then((s) => setStreak(s.streak)).catch(() => {});
+  }
+  useEffect(() => { reload(); }, []);
+
+  const antesRows = rows.filter((r) => r.pose === 'antes');
+  const antesCount = antesRows.length;
+  const before = antesRows[antesRows.length - 1] || rows[0];
+  const others = rows.filter((r) => r.pose !== 'antes');
+  const current = others[others.length - 1] || rows[rows.length - 1];
+
+  // Nova foto de evolução (registro temporal, sem limite)
   async function newPhoto() {
+    setBusy(true);
     const r = await pickAndUpload('body-photos', ctx.patientId, ctx.demo);
+    setBusy(false);
+    if (r.canceled) return;
+    if (r.error) return notify('Foto', r.error);
+    if (r.path) { await addPhoto(ctx, r.path, 'frente'); reload(); notify('Foto salva ✓', 'Registrada no seu histórico de evolução.'); }
+  }
+  // Foto "antes" — pode ser trocada no máximo 3x (correção de erro)
+  async function setBeforePhoto() {
+    if (antesCount >= ANTES_MAX) {
+      return notify('Limite atingido', `A foto "antes" já foi atualizada ${ANTES_MAX} vezes. Para ajustar, entre em contato com o suporte do Instituto.`);
+    }
+    setBusy(true);
+    const r = await pickAndUpload('body-photos', ctx.patientId, ctx.demo);
+    setBusy(false);
     if (r.canceled) return;
     if (r.error) return notify('Foto', r.error);
     if (r.path) {
-      await addPhoto(ctx, r.path, 'frente');
-      const url = await signedUrl('body-photos', r.path);
-      if (url) setPhotos((p) => [...p, url]);
+      await addPhoto(ctx, r.path, 'antes');
+      reload();
+      const rest = ANTES_MAX - (antesCount + 1);
+      notify('Foto "antes" definida ✓', rest > 0 ? `Você ainda pode corrigi-la ${rest}x, se precisar.` : 'Este foi o último ajuste permitido da foto "antes".');
     }
   }
+
   const latest = bio[bio.length - 1] || {};
+  const bioDate = latest.measured_at ? new Date(latest.measured_at).toLocaleDateString('pt-BR') : null;
   const weightCurve = bio.map((b, i) => ({ label: b.label ?? `#${i + 1}`, value: Number(b.weight_kg) })).filter((p) => !isNaN(p.value));
-  const before = photos[0];
-  const current = photos[photos.length - 1];
 
   return (
     <View>
-      <SectionLabel>Fotos de evolução</SectionLabel>
+      <SectionLabel>Antes e depois</SectionLabel>
       <View style={{ flexDirection: 'row', gap: 12 }}>
-        {[{ l: 'Antes', u: before }, { l: 'Atual', u: current }].map((it) => (
+        {[{ l: 'Antes', u: before?.signed }, { l: 'Atual', u: current?.signed }].map((it) => (
           <Card key={it.l} style={{ flex: 1, alignItems: 'center', paddingVertical: 24 }}>
             {it.u ? <Image source={{ uri: it.u }} style={styles.photo} /> : <View style={styles.photoPh}><Ionicons name="person" size={38} color={colors.textMuted} /></View>}
             <Text style={styles.photoLabel}>{it.l}</Text>
           </Card>
         ))}
       </View>
-      <GoldButton label="📸  Nova foto (com guia de pose)" outline onPress={newPhoto} style={{ marginTop: 12 }} />
+      <GoldButton label={busy ? 'Enviando…' : '📸  Nova foto de evolução'} onPress={newPhoto} style={{ marginTop: 12 }} />
+      <GoldButton
+        label={antesCount >= ANTES_MAX ? '🔒  Foto "antes" travada (limite 3x)' : `Definir foto "antes" (${antesCount}/${ANTES_MAX})`}
+        outline
+        onPress={setBeforePhoto}
+        style={{ marginTop: 10 }}
+      />
 
-      <SectionLabel>Composição corporal</SectionLabel>
+      <SectionLabel>Linha do tempo</SectionLabel>
+      {rows.length === 0 ? (
+        <Card><Text style={styles.small}>Suas fotos criam um histórico de evolução. Cada nova foto fica registrada com a data.</Text></Card>
+      ) : (
+        <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+          {rows.map((r) => (
+            <View key={r.id} style={{ marginRight: 10, alignItems: 'center' }}>
+              <Image source={{ uri: r.signed }} style={styles.tlPhoto} />
+              <Text style={styles.tlDate}>{new Date(r.taken_at).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })}</Text>
+              {r.pose === 'antes' && <Text style={styles.tlTag}>antes</Text>}
+            </View>
+          ))}
+        </ScrollView>
+      )}
+
+      <SectionLabel>Composição corporal {bioDate ? `· BIA ${bioDate}` : ''}</SectionLabel>
       <View style={{ flexDirection: 'row', gap: 12 }}>
         <StatTile label="Peso" value={latest.weight_kg != null ? String(latest.weight_kg) : '—'} unit="kg" />
-        <StatTile label="% Gordura" value={latest.body_fat_pct != null ? String(latest.body_fat_pct) : '—'} unit="%" />
-        <StatTile label="Massa magra" value={latest.lean_mass_kg != null ? String(latest.lean_mass_kg) : '—'} unit="kg" />
+        <StatTile label="IMC" value={latest.bmi != null ? String(latest.bmi) : '—'} unit="" />
+        <StatTile label="TMB" value={latest.bmr_kcal != null ? String(latest.bmr_kcal) : '—'} unit="kcal" />
       </View>
+      <Text style={styles.note}>Atualizada automaticamente a cada nova bioimpedância lançada pela equipe.</Text>
 
       <SectionLabel>Curva de peso</SectionLabel>
       {weightCurve.length > 0 ? (
@@ -93,6 +143,18 @@ function CorpoSection({ ctx }: { ctx: any }) {
       )}
 
       <SectionLabel>Conquistas</SectionLabel>
+      <Card glow style={{ marginBottom: 12 }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+          <View style={styles.streakMedal}><Ionicons name="flame" size={22} color={colors.gold} /></View>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.achieveTitle}>Constância · {streak}/30 dias</Text>
+            <Text style={styles.small}>Bata a meta de água e registre refeições todo dia. Aos 30 dias seguidos você ganha um prêmio e entra na comunidade! 🏆</Text>
+          </View>
+        </View>
+        <View style={{ height: 8, backgroundColor: colors.surfaceMuted, borderRadius: 4, overflow: 'hidden', marginTop: 12 }}>
+          <View style={{ height: 8, width: `${Math.min(100, (streak / 30) * 100)}%`, backgroundColor: colors.gold }} />
+        </View>
+      </Card>
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 12 }}>
         {achievements.map((a) => (
           <Card key={a.id} style={[styles.achieve, !a.unlocked && { opacity: 0.4 }]}>
@@ -259,9 +321,13 @@ const styles = StyleSheet.create({
   photo: { width: 88, height: 108, borderRadius: 12, borderWidth: 1, borderColor: colors.hairline },
   photoPh: { width: 88, height: 108, borderRadius: 12, backgroundColor: colors.surfaceMuted, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: colors.border },
   photoLabel: { ...type.caption, color: colors.textSecondary, marginTop: 8, textTransform: 'uppercase' },
+  tlPhoto: { width: 92, height: 116, borderRadius: 10, borderWidth: 1, borderColor: colors.hairline },
+  tlDate: { ...type.caption, color: colors.textSecondary, marginTop: 5 },
+  tlTag: { fontFamily: fonts.sansSemibold, fontSize: 9, color: colors.gold, textTransform: 'uppercase', letterSpacing: 0.5 },
   small: { ...type.small, color: colors.textSecondary },
   note: { ...type.small, color: colors.textMuted, marginTop: 4, marginBottom: 6 },
   chartTitle: { ...type.bodyStrong, color: colors.textPrimary, marginBottom: 4 },
+  streakMedal: { width: 44, height: 44, borderRadius: 22, backgroundColor: colors.gold + '22', borderWidth: 1, borderColor: colors.gold, alignItems: 'center', justifyContent: 'center' },
   achieve: { width: '47%' },
   medal: { width: 42, height: 42, borderRadius: 21, backgroundColor: colors.surfaceMuted, borderWidth: 1, borderColor: colors.border, alignItems: 'center', justifyContent: 'center', marginBottom: 10 },
   achieveTitle: { ...type.bodyStrong, color: colors.textPrimary },

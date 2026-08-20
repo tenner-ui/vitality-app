@@ -9,7 +9,7 @@ import * as FileSystem from 'expo-file-system';
 import { decode } from 'base64-arraybuffer';
 import { supabase, supabaseConfigured } from './supabase';
 
-export type Bucket = 'exams' | 'body-photos' | 'avatars' | 'cardio' | 'meal-photos' | 'bioimpedance' | 'community';
+export type Bucket = 'exams' | 'body-photos' | 'avatars' | 'cardio' | 'meal-photos' | 'bioimpedance' | 'community' | 'meal-plans';
 
 function extFrom(uri: string, mime?: string): string {
   const m = (mime || '').toLowerCase();
@@ -74,6 +74,71 @@ export async function pickAndUpload(
   } catch (e: any) {
     return { error: 'Falha ao enviar a imagem: ' + (e?.message || 'erro') };
   }
+}
+
+/**
+ * Envia uma imagem JÁ escolhida (base64 no nativo, uri no web) para um bucket.
+ * Usado pela calculadora de calorias quando o paciente decide "Comer".
+ */
+export async function uploadImageData(
+  bucket: Bucket,
+  patientId: string | null,
+  opts: { uri?: string; base64?: string; mime?: string }
+): Promise<{ path?: string; error?: string }> {
+  if (!supabaseConfigured || !patientId || patientId === 'demo') {
+    return { error: 'Disponível apenas em conta real.' };
+  }
+  const ext = extFrom(opts.uri || '', opts.mime);
+  const contentType = `image/${ext === 'jpg' ? 'jpeg' : ext}`;
+  const path = `${patientId}/${Date.now()}.${ext}`;
+  try {
+    let body: Blob | ArrayBuffer;
+    if (opts.base64) body = decode(opts.base64);
+    else if (opts.uri) body = await (await fetch(opts.uri)).blob();
+    else return { error: 'Sem imagem para enviar.' };
+    const { error } = await supabase.storage.from(bucket).upload(path, body as any, { contentType, upsert: true });
+    if (error) return { error: error.message };
+    return { path };
+  } catch (e: any) {
+    return { error: 'Falha ao enviar a imagem: ' + (e?.message || 'erro') };
+  }
+}
+
+/**
+ * Seletor de PDF (somente web/PWA) + upload para o bucket 'meal-plans'.
+ * O app VITALITY roda como web app, então usamos o seletor de arquivos do navegador.
+ */
+export async function pickAndUploadPdf(
+  folderId: string
+): Promise<{ path?: string; name?: string; error?: string; canceled?: boolean }> {
+  if (!supabaseConfigured) return { error: 'Supabase não configurado.' };
+  if (Platform.OS !== 'web' || typeof document === 'undefined') {
+    return { error: 'Envie o PDF pelo app no navegador (web).' };
+  }
+  const file: File | null = await new Promise((resolve) => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'application/pdf,.pdf';
+    input.onchange = () => resolve(input.files && input.files[0] ? input.files[0] : null);
+    input.click();
+  });
+  if (!file) return { canceled: true };
+  if (file.type && !file.type.includes('pdf')) return { error: 'Selecione um arquivo PDF.' };
+  const safe = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+  const path = `${folderId}/${Date.now()}_${safe}`;
+  const { error } = await supabase.storage.from('meal-plans').upload(path, file, {
+    contentType: 'application/pdf',
+    upsert: true,
+  });
+  if (error) return { error: error.message };
+  return { path, name: file.name };
+}
+
+/** URL assinada para um PDF de cardápio (bucket meal-plans). */
+export async function signedPdfUrl(path: string): Promise<string | null> {
+  if (!supabaseConfigured) return null;
+  const { data } = await supabase.storage.from('meal-plans').createSignedUrl(path, 3600);
+  return data?.signedUrl ?? null;
 }
 
 /** URL assinada temporária (1h) para exibir um arquivo privado. */

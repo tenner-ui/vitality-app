@@ -7,6 +7,7 @@ import { WorkoutScreen } from './WorkoutScreen';
 import { ChatScreen } from './ChatScreen';
 import { NudgeListener } from './NudgeListener';
 import { WaterReminder } from './WaterReminder';
+import { AchievementWatcher } from './AchievementWatcher';
 
 export type PatientStackParams = {
   Tabs: undefined;
@@ -28,6 +29,7 @@ export function PatientNavigator() {
       </Stack.Navigator>
       <NudgeListener />
       <WaterReminder />
+      <AchievementWatcher />
     </View>
   );
 }

@@ -2,7 +2,6 @@ import React, { useEffect, useState } from 'react';
 import { View, Text, StyleSheet, Pressable, TextInput, Image, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Screen, Card, SectionLabel, GoldButton, ProgressBar } from './ui';
 import { Header } from './Header';
 import { colors } from './colors';
@@ -10,7 +9,12 @@ import { fonts, type } from './typography';
 import { notify } from './notify';
 import { useAuth } from './AuthContext';
 import * as api from './api';
+import { uploadImageData } from './storage';
 import { Meal } from './types';
+
+function ymd(d: Date) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
 
 const CHIPS = [
   { label: 'Café da manhã', fill: '2 ovos cozidos, 1 banana e um café preto' },
@@ -41,7 +45,8 @@ export function CaloriesScreen() {
   const ctx = { demo, patientId: userId };
 
   const [meals, setMeals] = useState<Meal[]>([]);
-  const [target, setTarget] = useState(2200);
+  const [goal, setGoal] = useState<{ kcal: number; source: string }>({ kcal: 2000, source: '—' });
+  const [dayISO, setDayISO] = useState(ymd(new Date()));
   const [tab, setTab] = useState<'text' | 'photo'>('text');
   const [mealText, setMealText] = useState('');
   const [note, setNote] = useState('');
@@ -51,15 +56,30 @@ export function CaloriesScreen() {
   const [status, setStatus] = useState('');
   const [result, setResult] = useState<api.CalorieEstimate | null>(null);
 
-  const metaKey = `kcal:meta:${userId ?? 'anon'}`;
+  const target = goal.kcal;
+  const todayISO = ymd(new Date());
+  const isToday = dayISO === todayISO;
 
   function load() {
-    api.getMealsToday(ctx).then(setMeals).catch(() => {});
+    if (isToday) api.getMealsToday(ctx).then(setMeals).catch(() => {});
+    else api.getMealsByDate(ctx, dayISO).then(setMeals).catch(() => {});
   }
+  useEffect(() => { load(); }, [userId, demo, dayISO]);
   useEffect(() => {
-    load();
-    AsyncStorage.getItem(metaKey).then((v) => { if (v) setTarget(Number(v) || 2200); }).catch(() => {});
+    api.getCalorieGoal(ctx).then(setGoal).catch(() => {});
   }, [userId, demo]);
+
+  function shiftDay(delta: number) {
+    const d = new Date(dayISO + 'T12:00:00');
+    d.setDate(d.getDate() + delta);
+    const next = ymd(d);
+    if (next > todayISO) return; // não navega para o futuro
+    setDayISO(next);
+    resetComposer();
+  }
+  const dayLabel = isToday
+    ? 'Hoje'
+    : new Date(dayISO + 'T12:00:00').toLocaleDateString('pt-BR', { weekday: 'short', day: '2-digit', month: '2-digit' });
 
   const totals = meals.reduce(
     (a, m) => ({
@@ -107,22 +127,46 @@ export function CaloriesScreen() {
     }
   }
 
+  function buildMeal(photo_url: string | null, sent: boolean) {
+    const itens = result?.itens || [];
+    return {
+      title: result?.refeicao || 'Refeição',
+      photo_url,
+      calories: Math.round(Number(result?.total_kcal) || itens.reduce((s, i) => s + (Number(i.kcal) || 0), 0)),
+      protein_g: Math.round(Number(result?.total_prot) || itens.reduce((s, i) => s + (Number(i.prot) || 0), 0)),
+      carbs_g: Math.round(Number(result?.total_carb) || itens.reduce((s, i) => s + (Number(i.carb) || 0), 0)),
+      fat_g: Math.round(Number(result?.total_gord) || itens.reduce((s, i) => s + (Number(i.gord) || 0), 0)),
+      fiber_g: 0,
+      sent_to_nutri: sent,
+    };
+  }
+
+  // Modo TEXTO: registra no dia.
   async function addToDay() {
     if (!result) return;
-    const itens = result.itens || [];
-    const meal = {
-      title: result.refeicao || 'Refeição',
-      photo_url: null as string | null,
-      calories: Math.round(Number(result.total_kcal) || itens.reduce((s, i) => s + (Number(i.kcal) || 0), 0)),
-      protein_g: Math.round(Number(result.total_prot) || itens.reduce((s, i) => s + (Number(i.prot) || 0), 0)),
-      carbs_g: Math.round(Number(result.total_carb) || itens.reduce((s, i) => s + (Number(i.carb) || 0), 0)),
-      fat_g: Math.round(Number(result.total_gord) || itens.reduce((s, i) => s + (Number(i.gord) || 0), 0)),
-      fiber_g: 0,
-    };
-    const { error } = await api.addMeal(ctx, meal);
+    const { error } = await api.addMeal(ctx, buildMeal(null, false));
     if (error) return notify('Erro', error);
     resetComposer();
     load();
+  }
+
+  // Modo FOTO — "Comer": envia a foto ao repositório do paciente + à nutricionista e registra a refeição.
+  async function eatPhoto() {
+    if (!result) return;
+    setBusy(true);
+    const up = await uploadImageData('meal-photos', userId, { base64: photoB64 || undefined, uri: previewUri || undefined });
+    if (up.error || !up.path) { setBusy(false); return notify('Erro', up.error || 'Falha ao enviar a foto.'); }
+    const { error } = await api.addMeal(ctx, buildMeal(up.path, true));
+    setBusy(false);
+    if (error) return notify('Erro', error);
+    resetComposer();
+    load();
+    notify('Registrado ✓', 'Foto salva no seu repositório e enviada para a nutricionista.');
+  }
+
+  // Modo FOTO — "Passar": descarta sem registrar.
+  function skipPhoto() {
+    resetComposer();
   }
 
   function resetComposer() {
@@ -147,12 +191,6 @@ export function CaloriesScreen() {
     if (error) { notify('Erro', error); load(); }
   }
 
-  function onTargetChange(v: string) {
-    const n = Number(v) || 2200;
-    setTarget(n);
-    AsyncStorage.setItem(metaKey, String(n)).catch(() => {});
-  }
-
   const confLabel = result
     ? ({ alta: 'Confiança alta', media: 'Confiança média', baixa: 'Confiança baixa' } as any)[result.confianca] || 'Confiança média'
     : '';
@@ -161,9 +199,20 @@ export function CaloriesScreen() {
     <Screen>
       <Header title="Calorias" subtitle="Registro alimentar" rightIcon="flame-outline" />
 
-      {/* Consumo de hoje */}
+      {/* Navegador de dias — resgata qualquer dia anterior */}
+      <View style={styles.dayNav}>
+        <Pressable onPress={() => shiftDay(-1)} hitSlop={10} style={styles.dayBtn}>
+          <Ionicons name="chevron-back" size={18} color={colors.textPrimary} />
+        </Pressable>
+        <Text style={styles.dayLabel}>{dayLabel}</Text>
+        <Pressable onPress={() => shiftDay(1)} hitSlop={10} style={[styles.dayBtn, isToday && { opacity: 0.3 }]} disabled={isToday}>
+          <Ionicons name="chevron-forward" size={18} color={colors.textPrimary} />
+        </Pressable>
+      </View>
+
+      {/* Consumo do dia */}
       <Card glow>
-        <Text style={styles.eyebrow}>Consumo de hoje</Text>
+        <Text style={styles.eyebrow}>{isToday ? 'Consumo de hoje' : 'Consumo do dia'}</Text>
         <View style={styles.figure}>
           <Text style={styles.figNum}>{totals.kcal}</Text>
           <Text style={styles.figUnit}>kcal</Text>
@@ -171,14 +220,8 @@ export function CaloriesScreen() {
         <ProgressBar value={Math.min(pct, 1)} color={over ? colors.danger : colors.gold} height={10} />
         <View style={styles.metaRow}>
           <View style={styles.metaLabel}>
-            <Text style={styles.metaTxt}>Meta diária</Text>
-            <TextInput
-              style={styles.metaInput}
-              value={String(target)}
-              onChangeText={onTargetChange}
-              keyboardType="numeric"
-            />
-            <Text style={styles.metaTxt}>kcal</Text>
+            <Text style={styles.metaTxt}>Meta {goal.kcal} kcal</Text>
+            <View style={styles.metaChip}><Text style={styles.metaChipTxt}>{goal.source}</Text></View>
           </View>
           <Text style={[styles.remaining, over && { color: colors.danger }]}>
             {over ? `excedeu ${Math.abs(rest)}` : `restam ${rest}`}
@@ -198,7 +241,13 @@ export function CaloriesScreen() {
         </View>
       </Card>
 
-      {/* Composer */}
+      {/* Composer — apenas para o dia de hoje */}
+      {!isToday && (
+        <Card style={{ marginTop: 12 }}>
+          <Text style={styles.status2}>Você está vendo um dia anterior. Para registrar refeições, volte para “Hoje”.</Text>
+        </Card>
+      )}
+      {isToday && (<>
       <View style={styles.tabs}>
         {(['text', 'photo'] as const).map((t) => (
           <Pressable key={t} onPress={() => setTab(t)} style={[styles.tab, tab === t && styles.tabOn]}>
@@ -275,17 +324,28 @@ export function CaloriesScreen() {
             ))}
           </View>
           {!!result.observacao && <Text style={styles.obs}>{result.observacao}</Text>}
-          <View style={styles.resActions}>
-            <GoldButton label="Adicionar ao dia" onPress={addToDay} style={{ flex: 1 }} small />
-            <GoldButton label="Descartar" onPress={resetComposer} outline small style={{ flex: 1 }} />
-          </View>
+          {tab === 'photo' ? (
+            <>
+              <Text style={styles.decisionHint}>Vai comer? Ao escolher “Comer”, a foto vai para o seu repositório e é enviada à nutricionista.</Text>
+              <View style={styles.resActions}>
+                <GoldButton label={busy ? 'Enviando…' : '🍽  Comer'} onPress={eatPhoto} style={{ flex: 1 }} small />
+                <GoldButton label="Passar" onPress={skipPhoto} outline small style={{ flex: 1 }} />
+              </View>
+            </>
+          ) : (
+            <View style={styles.resActions}>
+              <GoldButton label="Adicionar ao dia" onPress={addToDay} style={{ flex: 1 }} small />
+              <GoldButton label="Descartar" onPress={resetComposer} outline small style={{ flex: 1 }} />
+            </View>
+          )}
         </Card>
       )}
+      </>)}
 
       {/* Diário */}
       <View style={styles.logHead}>
-        <SectionLabel>Refeições de hoje</SectionLabel>
-        {meals.length > 0 && (
+        <SectionLabel>{isToday ? 'Refeições de hoje' : `Refeições · ${dayLabel}`}</SectionLabel>
+        {isToday && meals.length > 0 && (
           <Pressable onPress={clearDay}><Text style={styles.clear}>zerar dia</Text></Pressable>
         )}
       </View>
@@ -324,10 +384,16 @@ const styles = StyleSheet.create({
   figNum: { fontFamily: fonts.serifBold, fontSize: 48, color: colors.gold, lineHeight: 50 },
   figUnit: { ...type.small, color: colors.textSecondary, letterSpacing: 1 },
   metaRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 14 },
-  metaLabel: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  metaLabel: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   metaTxt: { ...type.small, color: colors.textSecondary },
-  metaInput: { width: 60, borderBottomWidth: 1, borderBottomColor: colors.border, color: colors.gold, fontFamily: fonts.sansSemibold, fontSize: 14, textAlign: 'center', paddingVertical: 2 },
+  metaChip: { backgroundColor: colors.surfaceMuted, borderRadius: 999, paddingHorizontal: 8, paddingVertical: 2 },
+  metaChipTxt: { fontFamily: fonts.sansMedium, fontSize: 9, letterSpacing: 0.5, textTransform: 'uppercase', color: colors.textMuted },
   remaining: { fontFamily: fonts.sansSemibold, fontSize: 13, color: colors.textPrimary },
+  dayNav: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 18, marginBottom: 10 },
+  dayBtn: { width: 34, height: 34, borderRadius: 17, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border, alignItems: 'center', justifyContent: 'center' },
+  dayLabel: { fontFamily: fonts.sansSemibold, fontSize: 14, color: colors.textPrimary, minWidth: 140, textAlign: 'center', textTransform: 'capitalize' },
+  status2: { ...type.small, color: colors.textSecondary },
+  decisionHint: { ...type.small, color: colors.textSecondary, marginTop: 12 },
   macros: { flexDirection: 'row', gap: 1, marginTop: 16, backgroundColor: colors.border, borderRadius: 10, overflow: 'hidden' },
   macro: { flex: 1, backgroundColor: colors.surface, paddingVertical: 12, alignItems: 'center' },
   macroK: { fontFamily: fonts.sansMedium, fontSize: 9, letterSpacing: 1.5, textTransform: 'uppercase', color: colors.textMuted },

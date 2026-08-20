@@ -9,7 +9,6 @@ import { HomeScreen } from './HomeScreen';
 import { NutritionScreen } from './NutritionScreen';
 import { CaloriesScreen } from './CaloriesScreen';
 import { SaudeScreen } from './SaudeScreen';
-import { CardioScreen } from './CardioScreen';
 import { CommunityScreen } from './CommunityScreen';
 import { AgendaScreen } from './AgendaScreen';
 import { PatientProfileScreen } from './PatientProfileScreen';
@@ -39,7 +38,6 @@ export function PatientTabs() {
       <Tab.Screen name="Nutrição" component={NutritionScreen} />
       <Tab.Screen name="Calorias" component={CaloriesScreen} />
       <Tab.Screen name="Saúde" component={SaudeScreen} />
-      <Tab.Screen name="Cardio" component={CardioScreen} />
       <Tab.Screen name="Comunidade" component={CommunityScreen} />
       <Tab.Screen name="Agenda" component={AgendaScreen} />
       <Tab.Screen name="Perfil" component={PatientProfileScreen} />

@@ -154,6 +154,20 @@ export function TeamHomeScreen() {
         </Card>
       </View>
 
+      {/* Atalho da Nutrição (nutricionista e líder) */}
+      {(role === 'nutricionista' || isLeader) && (activeLens === 'all' || activeLens === 'nutricionista') && (
+        <Pressable onPress={() => nav.navigate('NutriDesk')}>
+          <Card glow style={{ flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 4 }}>
+            <View style={styles.nutriIcon}><Ionicons name="nutrition" size={20} color={colors.textOnGold} /></View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.patient}>Publicações da Nutrição</Text>
+              <Text style={styles.sub}>Mural de dicas · cardápio em PDF · fotos dos pacientes</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color={colors.textMuted} />
+          </Card>
+        </Pressable>
+      )}
+
       {/* Painel de liberação (líder) */}
       {isLeader && pendentes.length > 0 && (
         <>
@@ -288,4 +302,5 @@ const styles = StyleSheet.create({
 
   liberarBtn: { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: colors.gold, paddingHorizontal: 14, paddingVertical: 9, borderRadius: 999 },
   liberarTxt: { fontFamily: fonts.sansSemibold, fontSize: 13, color: colors.textOnGold },
+  nutriIcon: { width: 40, height: 40, borderRadius: 20, backgroundColor: colors.success, alignItems: 'center', justifyContent: 'center' },
 });
