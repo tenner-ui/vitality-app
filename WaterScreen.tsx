@@ -12,6 +12,7 @@ import { dailyGoals, waterWeek } from './mock';
 import { ensurePermissions, scheduleWaterReminder, cancelReminder } from './notifications';
 import { useAuth } from './AuthContext';
 import { getWaterToday, addWater } from './api';
+import { playWaterChime, initAudio } from './bell';
 
 const DAYS = ['Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb', 'Dom'];
 
@@ -27,6 +28,8 @@ export function WaterScreen() {
   }, [userId, demo]);
 
   async function drink(amount: number) {
+    initAudio();
+    playWaterChime();
     setMl((v) => v + amount);
     try {
       await addWater(ctx, amount);

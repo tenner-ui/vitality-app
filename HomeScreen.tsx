@@ -38,6 +38,7 @@ export function HomeScreen() {
   const [calories, setCalories] = useState(0);
   const [workoutDone, setWorkoutDone] = useState(0);
   const [weights, setWeights] = useState<WeightMeasure[]>([]);
+  const [bio, setBio] = useState<any[]>([]);
   const [appts, setAppts] = useState<Appointment[]>([]);
   const [msgs, setMsgs] = useState<Message[]>([]);
   const [program, setProgram] = useState<{ program?: string; phase?: string; week?: number } | null>(null);
@@ -47,6 +48,7 @@ export function HomeScreen() {
     api.getMealsToday(ctx).then((m) => setCalories(m.reduce((s, x) => s + (x.calories || 0), 0))).catch(() => {});
     api.getWorkoutToday(ctx).then((w) => setWorkoutDone(w?.items?.length ? 1 : 0)).catch(() => {});
     api.getWeightHistory(ctx).then(setWeights).catch(() => {});
+    api.getBioSeries(ctx).then(setBio).catch(() => {});
     api.getAppointments(ctx).then((a) => setAppts(a.filter((x) => x.status !== 'cancelado'))).catch(() => {});
     api.getMessages(ctx).then(setMsgs).catch(() => {});
     api.getMyProgram(ctx).then(setProgram).catch(() => {});
@@ -59,10 +61,15 @@ export function HomeScreen() {
     ]);
   }
 
-  // Peso: primeira vs última medição
-  const firstW = weights[0]?.weight_kg;
-  const lastW = weights[weights.length - 1]?.weight_kg;
+  // Peso: usa as medições de peso; se não houver, usa a série de bioimpedância (mesma fonte da composição corporal).
+  const wSeries: number[] = (weights.length
+    ? weights.map((w) => Number(w.weight_kg))
+    : bio.map((b) => Number(b.weight_kg))
+  ).filter((n) => !isNaN(n));
+  const firstW = wSeries[0];
+  const lastW = wSeries[wSeries.length - 1];
   const lost = firstW != null && lastW != null ? (firstW - lastW).toFixed(1) : null;
+  const lastBio = bio.length ? bio[bio.length - 1] : null;
 
   // Próximos compromissos (futuros)
   const now = Date.now();
@@ -130,6 +137,15 @@ export function HomeScreen() {
               <Text style={styles.metricBig}>—</Text>
               <Text style={styles.metricSub}>registre seu peso na aba Saúde</Text>
             </>
+          )}
+          {lastBio && (
+            <Text style={[styles.metricSub, { marginTop: 6, color: colors.gold }]}>
+              {[
+                lastBio.bmi != null ? `IMC ${Number(lastBio.bmi).toFixed(1)}` : null,
+                lastBio.waist_cm != null ? `Cintura ${Number(lastBio.waist_cm).toFixed(0)}cm` : null,
+                lastBio.bmr_kcal != null ? `TMB ${lastBio.bmr_kcal}kcal` : null,
+              ].filter(Boolean).join(' · ')}
+            </Text>
           )}
         </Card>
         <Card style={{ flex: 1 }}>

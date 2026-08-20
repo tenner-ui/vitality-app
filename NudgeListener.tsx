@@ -3,7 +3,7 @@ import { View, Text, StyleSheet, Pressable, Animated } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { supabase, supabaseConfigured } from './supabase';
 import { useAuth } from './AuthContext';
-import { playBell, initAudio } from './bell';
+import { playBell, initAudio, armAudioUnlock } from './bell';
 import { colors } from './colors';
 import { fonts, type } from './typography';
 
@@ -18,6 +18,7 @@ export function NudgeListener() {
 
   useEffect(() => {
     if (!supabaseConfigured || demo || !userId || userId === 'demo') return;
+    armAudioUnlock();
     initAudio();
     const ch = supabase
       .channel(`nudges:${userId}`)

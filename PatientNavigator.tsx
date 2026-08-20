@@ -6,6 +6,7 @@ import { WaterScreen } from './WaterScreen';
 import { WorkoutScreen } from './WorkoutScreen';
 import { ChatScreen } from './ChatScreen';
 import { NudgeListener } from './NudgeListener';
+import { WaterReminder } from './WaterReminder';
 
 export type PatientStackParams = {
   Tabs: undefined;
@@ -26,6 +27,7 @@ export function PatientNavigator() {
         <Stack.Screen name="Chat" component={ChatScreen} />
       </Stack.Navigator>
       <NudgeListener />
+      <WaterReminder />
     </View>
   );
 }
