@@ -168,6 +168,20 @@ export function TeamHomeScreen() {
         </Pressable>
       )}
 
+      {/* Importar pacientes por pasta de PDFs (líder) */}
+      {isLeader && (
+        <Pressable onPress={() => nav.navigate('ImportPacientes')}>
+          <Card glow style={{ flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 4 }}>
+            <View style={styles.importIcon}><Ionicons name="cloud-upload" size={20} color={colors.textOnGold} /></View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.patient}>Importar pacientes</Text>
+              <Text style={styles.sub}>Suba as pastas de bioimpedância (PDF) · a IA alimenta os dados</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color={colors.textMuted} />
+          </Card>
+        </Pressable>
+      )}
+
       {/* Painel de liberação (líder) */}
       {isLeader && pendentes.length > 0 && (
         <>
@@ -303,4 +317,5 @@ const styles = StyleSheet.create({
   liberarBtn: { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: colors.gold, paddingHorizontal: 14, paddingVertical: 9, borderRadius: 999 },
   liberarTxt: { fontFamily: fonts.sansSemibold, fontSize: 13, color: colors.textOnGold },
   nutriIcon: { width: 40, height: 40, borderRadius: 20, backgroundColor: colors.success, alignItems: 'center', justifyContent: 'center' },
+  importIcon: { width: 40, height: 40, borderRadius: 20, backgroundColor: colors.navy, alignItems: 'center', justifyContent: 'center' },
 });

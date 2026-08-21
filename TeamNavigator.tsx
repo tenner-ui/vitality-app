@@ -11,11 +11,13 @@ import { PatientListScreen } from './PatientListScreen';
 import { TeamProfileScreen } from './TeamProfileScreen';
 import { PatientDetailScreen } from './PatientDetailScreen';
 import { NutriDeskScreen } from './NutriDeskScreen';
+import { ImportPacientesScreen } from './ImportPacientesScreen';
 
 export type TeamStackParams = {
   TeamTabs: undefined;
   PatientDetail: { id: string; name: string };
   NutriDesk: undefined;
+  ImportPacientes: undefined;
 };
 
 const Stack = createNativeStackNavigator<TeamStackParams>();
@@ -46,6 +48,7 @@ export function TeamNavigator() {
       <Stack.Screen name="TeamTabs" component={TeamTabs} />
       <Stack.Screen name="PatientDetail" component={PatientDetailScreen} />
       <Stack.Screen name="NutriDesk" component={NutriDeskScreen} />
+      <Stack.Screen name="ImportPacientes" component={ImportPacientesScreen} />
     </Stack.Navigator>
   );
 }
