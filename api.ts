@@ -208,7 +208,7 @@ export async function getMessages(ctx: Ctx, patientId?: string): Promise<Message
   if (!supabaseConfigured || ctx.demo || pid === 'demo') return mock.chatMessages;
   const { data } = await supabase
     .from('messages')
-    .select('id, sender_role, body, created_at, profiles:sender_id(full_name)')
+    .select('id, sender_role, body, created_at, audio_path, profiles:sender_id(full_name)')
     .eq('patient_id', pid)
     .order('created_at', { ascending: true });
   return (data ?? []).map((m: any) => ({
@@ -217,6 +217,7 @@ export async function getMessages(ctx: Ctx, patientId?: string): Promise<Message
     sender_name: m.profiles?.full_name ?? 'Equipe',
     body: m.body,
     created_at: m.created_at,
+    audio_path: m.audio_path ?? null,
   }));
 }
 
@@ -236,6 +237,117 @@ export async function sendMessage(
     sender_role: role,
     body,
   });
+}
+
+/** Envia uma mensagem de voz: o áudio já está no Storage (audio_path). */
+export async function sendAudioMessage(
+  ctx: Ctx,
+  audioPath: string,
+  role: Role,
+  patientId?: string
+): Promise<{ error?: string }> {
+  const pid = patientId ?? ctx.patientId;
+  if (!supabaseConfigured || ctx.demo || !pid || pid === 'demo') return { error: 'Indisponível.' };
+  const { data: u } = await supabase.auth.getUser();
+  if (!u.user) return { error: 'Sessão expirada.' };
+  const { error } = await supabase.from('messages').insert({
+    patient_id: pid,
+    sender_id: u.user.id,
+    sender_role: role,
+    body: '🎤 Mensagem de voz',
+    audio_path: audioPath,
+  });
+  return { error: error?.message };
+}
+
+// ------------------------- PASSOS (ATIVIDADE) -------------------------
+function ymdLocal(d: Date) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+/** Passos registrados num dia (YYYY-MM-DD); default = hoje. */
+export async function getStepsByDate(ctx: Ctx, dayISO?: string): Promise<number> {
+  if (!isReal(ctx)) return 0;
+  const day = dayISO ?? ymdLocal(new Date());
+  const { data } = await supabase
+    .from('steps_activity')
+    .select('steps')
+    .eq('patient_id', ctx.patientId)
+    .eq('day', day)
+    .maybeSingle();
+  return Number(data?.steps ?? 0);
+}
+
+export async function getStepsToday(ctx: Ctx): Promise<number> {
+  return getStepsByDate(ctx);
+}
+
+/** Grava (upsert) os passos de um dia. */
+export async function setSteps(ctx: Ctx, steps: number, dayISO?: string): Promise<{ error?: string }> {
+  if (!isReal(ctx)) return { error: 'Indisponível.' };
+  const day = dayISO ?? ymdLocal(new Date());
+  const val = Math.max(0, Math.round(steps || 0));
+  const { error } = await supabase
+    .from('steps_activity')
+    .upsert({ patient_id: ctx.patientId, day, steps: val, updated_at: new Date().toISOString() }, { onConflict: 'patient_id,day' });
+  return { error: error?.message };
+}
+
+/**
+ * Estimativa de calorias gastas caminhando.
+ * ~0,0005 kcal por passo por kg de peso corporal (≈35 kcal/1000 passos a 70 kg).
+ * Sem peso conhecido, usa 70 kg como referência.
+ */
+export function stepsToKcal(steps: number, weightKg?: number | null): number {
+  const w = weightKg && weightKg > 0 ? weightKg : 70;
+  return Math.round(Math.max(0, steps || 0) * w * 0.0005);
+}
+
+// ------------------------- DIÁRIO DO PACIENTE -------------------------
+export interface DiaryEntry { day: string; mood: number | null; sleep: number | null; note: string; updated_at?: string; }
+
+/** Entrada do diário de um dia (YYYY-MM-DD); default = hoje. */
+export async function getDiaryByDate(ctx: Ctx, dayISO?: string): Promise<DiaryEntry | null> {
+  if (!isReal(ctx)) return null;
+  const day = dayISO ?? ymdLocal(new Date());
+  const { data } = await supabase
+    .from('diary_entries')
+    .select('day, mood, sleep, note, updated_at')
+    .eq('patient_id', ctx.patientId)
+    .eq('day', day)
+    .maybeSingle();
+  return (data as any) ?? null;
+}
+
+/** Salva (upsert) a entrada do diário de um dia. */
+export async function saveDiary(
+  ctx: Ctx,
+  input: { day?: string; mood?: number | null; sleep?: number | null; note?: string }
+): Promise<{ error?: string }> {
+  if (!isReal(ctx)) return { error: 'Indisponível.' };
+  const day = input.day ?? ymdLocal(new Date());
+  const { error } = await supabase.from('diary_entries').upsert({
+    patient_id: ctx.patientId,
+    day,
+    mood: input.mood ?? null,
+    sleep: input.sleep ?? null,
+    note: (input.note ?? '').trim() || null,
+    updated_at: new Date().toISOString(),
+  }, { onConflict: 'patient_id,day' });
+  return { error: error?.message };
+}
+
+/** Últimas entradas do diário (paciente ou, para a equipe, de um paciente). */
+export async function getDiaryEntries(ctx: Ctx, limit = 30, patientId?: string): Promise<DiaryEntry[]> {
+  const pid = patientId ?? ctx.patientId;
+  if (!supabaseConfigured || ctx.demo || !pid || pid === 'demo') return [];
+  const { data } = await supabase
+    .from('diary_entries')
+    .select('day, mood, sleep, note, updated_at')
+    .eq('patient_id', pid)
+    .order('day', { ascending: false })
+    .limit(limit);
+  return (data as any) ?? [];
 }
 
 // ------------------------- FOTOS DE EVOLUÇÃO -------------------------
@@ -278,6 +390,43 @@ export async function getBioSeries(ctx: Ctx, patientId?: string): Promise<any[]>
     .eq('patient_id', pid)
     .order('measured_at', { ascending: true });
   return data ?? [];
+}
+
+/** Sexo e data de nascimento do paciente (para estimar % de gordura quando o laudo não traz). */
+export async function getBodyProfile(ctx: Ctx, patientId?: string): Promise<{ sex: 'M' | 'F' | null; birth_date: string | null }> {
+  const pid = patientId ?? ctx.patientId;
+  if (!supabaseConfigured || ctx.demo || !pid || pid === 'demo') return { sex: null, birth_date: null };
+  const { data } = await supabase.from('profiles').select('sex, birth_date').eq('id', pid).maybeSingle();
+  return { sex: (data?.sex as any) ?? null, birth_date: data?.birth_date ?? null };
+}
+
+/**
+ * Massa de gordura de uma medição.
+ * Usa o valor MEDIDO (fat_mass_kg) quando existir; senão ESTIMA por Deurenberg
+ * (%GC = 1,20·IMC + 0,23·idade − 10,8·sexo − 5,4; sexo M=1, F=0) quando houver
+ * IMC, sexo e idade. Retorna { kg, estimated } ou null se não der para calcular.
+ */
+export function fatMassOf(
+  row: any,
+  sex: 'M' | 'F' | null,
+  birthDate: string | null
+): { kg: number; estimated: boolean } | null {
+  const measured = Number(row?.fat_mass_kg);
+  if (!isNaN(measured) && measured > 0) return { kg: measured, estimated: false };
+  const weight = Number(row?.weight_kg);
+  const bmi = Number(row?.bmi);
+  const pct = Number(row?.body_fat_pct);
+  if (!isNaN(pct) && pct > 0 && !isNaN(weight)) return { kg: Math.round((weight * pct) / 100 * 10) / 10, estimated: false };
+  if (!sex || !birthDate || isNaN(bmi) || isNaN(weight)) return null;
+  const when = row?.measured_at ? new Date(row.measured_at) : new Date();
+  const bd = new Date(birthDate + 'T00:00:00');
+  let age = when.getFullYear() - bd.getFullYear();
+  const mDiff = when.getMonth() - bd.getMonth();
+  if (mDiff < 0 || (mDiff === 0 && when.getDate() < bd.getDate())) age--;
+  if (age <= 0 || age > 120) return null;
+  const bf = 1.2 * bmi + 0.23 * age - 10.8 * (sex === 'M' ? 1 : 0) - 5.4;
+  if (bf <= 0 || bf > 70) return null;
+  return { kg: Math.round((weight * bf) / 100 * 10) / 10, estimated: true };
 }
 
 export async function addBioimpedance(ctx: Ctx, patientId: string, input: Record<string, any>): Promise<{ error?: string }> {

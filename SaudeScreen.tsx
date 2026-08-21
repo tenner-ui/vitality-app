@@ -8,7 +8,7 @@ import { LineChart } from './LineChart';
 import { colors } from './colors';
 import { fonts, type } from './typography';
 import { useAuth } from './AuthContext';
-import { getBioSeries, getCardioReports, getLabResults, getPhotos, getStreakInfo } from './api';
+import { getBioSeries, getCardioReports, getLabResults, getPhotos, getStreakInfo, getBodyProfile, fatMassOf } from './api';
 import { pickAndUpload, signedUrl } from './storage';
 import { addPhoto } from './api';
 import { achievements, weightTrend } from './mock';
@@ -46,12 +46,14 @@ function CorpoSection({ ctx }: { ctx: any }) {
   const [bio, setBio] = useState<any[]>([]);
   const [busy, setBusy] = useState(false);
   const [streak, setStreak] = useState(0);
+  const [bodyProf, setBodyProf] = useState<{ sex: 'M' | 'F' | null; birth_date: string | null }>({ sex: null, birth_date: null });
 
   async function reload() {
     const raw = await getPhotos(ctx).catch(() => []);
     const withUrls = await Promise.all(raw.map(async (r) => ({ ...r, signed: (await signedUrl('body-photos', r.url)) || undefined })));
     setRows(withUrls.filter((r) => r.signed));
     setBio(await getBioSeries(ctx).catch(() => []));
+    getBodyProfile(ctx).then(setBodyProf).catch(() => {});
     getStreakInfo(ctx, 30).then((s) => setStreak(s.streak)).catch(() => {});
   }
   useEffect(() => { reload(); }, []);
@@ -90,8 +92,28 @@ function CorpoSection({ ctx }: { ctx: any }) {
   }
 
   const latest = bio[bio.length - 1] || {};
+  const first = bio[0] || {};
   const bioDate = latest.measured_at ? new Date(latest.measured_at).toLocaleDateString('pt-BR') : null;
-  const weightCurve = bio.map((b, i) => ({ label: b.label ?? `#${i + 1}`, value: Number(b.weight_kg) })).filter((p) => !isNaN(p.value));
+  const shortDate = (s?: string) => (s ? new Date(s).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }) : '');
+  const weightCurve = bio
+    .map((b, i) => ({ label: b.measured_at ? shortDate(b.measured_at) : `#${i + 1}`, value: Number(b.weight_kg) }))
+    .filter((p) => !isNaN(p.value));
+
+  // Peso inicial × atual e perda acumulada
+  const firstW = Number(first.weight_kg);
+  const lastW = Number(latest.weight_kg);
+  const hasWeights = !isNaN(firstW) && !isNaN(lastW);
+  const weightLost = hasWeights ? Math.round((firstW - lastW) * 10) / 10 : null;
+
+  // Curva de gordura (massa gorda em kg): medida quando o laudo traz; senão estimada.
+  const fatComputed = bio.map((b) => ({ b, fm: fatMassOf(b, bodyProf.sex, bodyProf.birth_date) }));
+  const fatCurve = fatComputed
+    .filter((x) => x.fm)
+    .map((x) => ({ label: x.b.measured_at ? shortDate(x.b.measured_at) : '', value: (x.fm as any).kg }));
+  const fatEstimated = fatComputed.some((x) => x.fm && (x.fm as any).estimated);
+  const firstFat = fatCurve.length ? fatCurve[0].value : null;
+  const lastFat = fatCurve.length ? fatCurve[fatCurve.length - 1].value : null;
+  const fatLost = firstFat != null && lastFat != null ? Math.round((firstFat - lastFat) * 10) / 10 : null;
 
   return (
     <View>
@@ -127,17 +149,37 @@ function CorpoSection({ ctx }: { ctx: any }) {
         </ScrollView>
       )}
 
-      <SectionLabel>Composição corporal {bioDate ? `· BIA ${bioDate}` : ''}</SectionLabel>
+      <SectionLabel>Peso {bioDate ? `· BIA ${bioDate}` : ''}</SectionLabel>
       <View style={{ flexDirection: 'row', gap: 12 }}>
-        <StatTile label="Peso" value={latest.weight_kg != null ? String(latest.weight_kg) : '—'} unit="kg" />
+        <StatTile label="Peso inicial" value={hasWeights ? String(firstW) : '—'} unit="kg" />
+        <StatTile label="Peso atual" value={hasWeights ? String(lastW) : '—'} unit="kg" hint={weightLost != null && weightLost !== 0 ? `${weightLost > 0 ? '-' : '+'}${Math.abs(weightLost)} kg` : undefined} />
+        <StatTile label="Gordura perdida" value={fatLost != null ? String(Math.abs(fatLost)) : '—'} unit="kg" />
+      </View>
+      <Text style={styles.note}>Peso inicial ao lado do atual. Atualizado a cada nova bioimpedância.</Text>
+
+      <SectionLabel>Composição corporal</SectionLabel>
+      <View style={{ flexDirection: 'row', gap: 12 }}>
         <StatTile label="IMC" value={latest.bmi != null ? String(latest.bmi) : '—'} unit="" />
+        <StatTile label="% Gordura" value={latest.body_fat_pct != null ? String(latest.body_fat_pct) : '—'} unit="%" />
         <StatTile label="TMB" value={latest.bmr_kcal != null ? String(latest.bmr_kcal) : '—'} unit="kcal" />
       </View>
-      <Text style={styles.note}>Atualizada automaticamente a cada nova bioimpedância lançada pela equipe.</Text>
 
-      <SectionLabel>Curva de peso</SectionLabel>
+      <SectionLabel>Curva de peso e gordura</SectionLabel>
       {weightCurve.length > 0 ? (
-        <Card><LineChart data={weightCurve} unit="kg" color={colors.blueAccent} /></Card>
+        <Card>
+          <LineChart
+            data={weightCurve}
+            series2={fatCurve.length ? fatCurve : undefined}
+            color={colors.blueAccent}
+            color2={colors.gold}
+            label="Peso (kg)"
+            label2={fatCurve.length ? `Gordura (kg)${fatEstimated ? ' · estimada' : ''}` : undefined}
+            unit="kg"
+          />
+          {fatCurve.length === 0 && (
+            <Text style={styles.small}>A curva de gordura aparece quando a bioimpedância trouxer a massa gorda. Reimporte os laudos pelo painel para preencher o histórico.</Text>
+          )}
+        </Card>
       ) : (
         <Card><Text style={styles.small}>Sem medições ainda. A equipe registra sua bioimpedância e a curva aparece aqui.</Text></Card>
       )}

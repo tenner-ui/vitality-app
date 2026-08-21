@@ -125,6 +125,7 @@ export interface Message {
   sender_name: string;
   body: string;
   created_at: string;
+  audio_path?: string | null;
 }
 
 export interface Achievement {

@@ -21,6 +21,10 @@ export function LineChart({
   refLow,
   refHigh,
   goal,
+  series2,
+  color2 = colors.gold,
+  label,
+  label2,
 }: {
   data: ChartPoint[];
   unit?: string;
@@ -29,6 +33,10 @@ export function LineChart({
   refLow?: number;
   refHigh?: number;
   goal?: number;
+  series2?: ChartPoint[];
+  color2?: string;
+  label?: string;
+  label2?: string;
 }) {
   const W = 300;
   const H = height;
@@ -45,10 +53,13 @@ export function LineChart({
     );
   }
 
+  const s2 = (series2 || []).filter((p) => typeof p.value === 'number' && !isNaN(p.value));
+  const has2 = s2.length > 0;
   const values = data.map((d) => d.value);
+  const values2 = s2.map((d) => d.value);
   const extra = [refLow, refHigh, goal].filter((v): v is number => typeof v === 'number');
-  const min = Math.min(...values, ...extra);
-  const max = Math.max(...values, ...extra);
+  const min = Math.min(...values, ...values2, ...extra);
+  const max = Math.max(...values, ...values2, ...extra);
   const range = max - min || 1;
   const pad = range * 0.15;
   const yMin = min - pad;
@@ -57,8 +68,11 @@ export function LineChart({
 
   const x = (i: number) => padL + (i / Math.max(1, data.length - 1)) * (W - padL - padR);
   const y = (v: number) => padT + (1 - (v - yMin) / yRange) * (H - padT - padB);
+  // A segunda série é ancorada no mesmo eixo X da primeira (mesmas datas).
+  const x2 = (i: number) => padL + (i / Math.max(1, s2.length - 1)) * (W - padL - padR);
 
   const points = data.map((d, i) => `${x(i)},${y(d.value)}`).join(' ');
+  const points2 = s2.map((d, i) => `${x2(i)},${y(d.value)}`).join(' ');
 
   return (
     <View>
@@ -79,7 +93,10 @@ export function LineChart({
         {/* rótulos min/max Y */}
         <SvgText x={padL - 4} y={y(yMax) + 4} fontSize="8" fill={colors.textMuted} textAnchor="end">{Math.round(yMax)}</SvgText>
         <SvgText x={padL - 4} y={y(yMin) + 4} fontSize="8" fill={colors.textMuted} textAnchor="end">{Math.round(yMin)}</SvgText>
-        {/* linha */}
+        {/* 2ª linha (ex.: gordura) */}
+        {has2 && <Polyline points={points2} fill="none" stroke={color2} strokeWidth={2.5} strokeLinejoin="round" strokeLinecap="round" />}
+        {has2 && s2.map((d, i) => <Circle key={`s2-${i}`} cx={x2(i)} cy={y(d.value)} r={3} fill={color2} />)}
+        {/* linha principal */}
         <Polyline points={points} fill="none" stroke={color} strokeWidth={2.5} strokeLinejoin="round" strokeLinecap="round" />
         {/* pontos + rótulos X */}
         {data.map((d, i) => (
@@ -89,12 +106,34 @@ export function LineChart({
           </React.Fragment>
         ))}
       </Svg>
-      {!!unit && <Text style={styles.unit}>{unit}</Text>}
+      {(label || label2) ? (
+        <View style={styles.legend}>
+          {!!label && (
+            <View style={styles.legendItem}>
+              <View style={[styles.legendDot, { backgroundColor: color }]} />
+              <Text style={styles.legendTxt}>{label}</Text>
+            </View>
+          )}
+          {!!label2 && has2 && (
+            <View style={styles.legendItem}>
+              <View style={[styles.legendDot, { backgroundColor: color2 }]} />
+              <Text style={styles.legendTxt}>{label2}</Text>
+            </View>
+          )}
+          {!!unit && <Text style={styles.unit}>{unit}</Text>}
+        </View>
+      ) : (
+        !!unit && <Text style={styles.unit}>{unit}</Text>
+      )}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   empty: { fontFamily: fonts.sans, fontSize: 13, color: colors.textMuted },
-  unit: { fontFamily: fonts.sans, fontSize: 10, color: colors.textMuted, textAlign: 'right', marginTop: 2 },
+  unit: { fontFamily: fonts.sans, fontSize: 10, color: colors.textMuted, textAlign: 'right', marginTop: 2, flex: 1 },
+  legend: { flexDirection: 'row', alignItems: 'center', gap: 14, marginTop: 6, paddingHorizontal: 4 },
+  legendItem: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  legendDot: { width: 10, height: 10, borderRadius: 5 },
+  legendTxt: { fontFamily: fonts.sans, fontSize: 11, color: colors.textSecondary },
 });

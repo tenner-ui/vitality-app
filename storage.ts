@@ -9,7 +9,7 @@ import * as FileSystem from 'expo-file-system';
 import { decode } from 'base64-arraybuffer';
 import { supabase, supabaseConfigured } from './supabase';
 
-export type Bucket = 'exams' | 'body-photos' | 'avatars' | 'cardio' | 'meal-photos' | 'bioimpedance' | 'community' | 'meal-plans';
+export type Bucket = 'exams' | 'body-photos' | 'avatars' | 'cardio' | 'meal-photos' | 'bioimpedance' | 'community' | 'meal-plans' | 'chat-audio';
 
 function extFrom(uri: string, mime?: string): string {
   const m = (mime || '').toLowerCase();
@@ -132,6 +132,38 @@ export async function pickAndUploadPdf(
   });
   if (error) return { error: error.message };
   return { path, name: file.name };
+}
+
+/**
+ * Envia um áudio gravado no chat (web: Blob do MediaRecorder) para o bucket 'chat-audio'.
+ * Caminho: "<patient_id>/<timestamp>.<ext>" — o paciente grava na própria pasta;
+ * a equipe grava na pasta do paciente (RLS permite via is_team()).
+ */
+export async function uploadAudioBlob(
+  patientId: string | null,
+  blob: Blob
+): Promise<{ path?: string; error?: string }> {
+  if (!supabaseConfigured || !patientId || patientId === 'demo') {
+    return { error: 'Disponível apenas em conta real.' };
+  }
+  const type = (blob.type || 'audio/webm').toLowerCase();
+  const ext = type.includes('mp4') || type.includes('aac')
+    ? 'm4a'
+    : type.includes('ogg')
+      ? 'ogg'
+      : type.includes('mpeg')
+        ? 'mp3'
+        : 'webm';
+  const path = `${patientId}/${Date.now()}.${ext}`;
+  try {
+    const { error } = await supabase.storage
+      .from('chat-audio')
+      .upload(path, blob as any, { contentType: blob.type || 'audio/webm', upsert: true });
+    if (error) return { error: error.message };
+    return { path };
+  } catch (e: any) {
+    return { error: 'Falha ao enviar o áudio: ' + (e?.message || 'erro') };
+  }
 }
 
 /** URL assinada para um PDF de cardápio (bucket meal-plans). */

@@ -55,6 +55,10 @@ export function CaloriesScreen() {
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState('');
   const [result, setResult] = useState<api.CalorieEstimate | null>(null);
+  const [steps, setStepsVal] = useState(0);
+  const [stepsInput, setStepsInput] = useState('');
+  const [savingSteps, setSavingSteps] = useState(false);
+  const [weightKg, setWeightKg] = useState<number | null>(null);
 
   const target = goal.kcal;
   const todayISO = ymd(new Date());
@@ -63,11 +67,27 @@ export function CaloriesScreen() {
   function load() {
     if (isToday) api.getMealsToday(ctx).then(setMeals).catch(() => {});
     else api.getMealsByDate(ctx, dayISO).then(setMeals).catch(() => {});
+    api.getStepsByDate(ctx, dayISO).then((s) => { setStepsVal(s); setStepsInput(s ? String(s) : ''); }).catch(() => {});
   }
   useEffect(() => { load(); }, [userId, demo, dayISO]);
   useEffect(() => {
     api.getCalorieGoal(ctx).then(setGoal).catch(() => {});
+    api.getWeightHistory(ctx).then((w) => {
+      const last = w.length ? Number(w[w.length - 1].weight_kg) : null;
+      setWeightKg(last && !isNaN(last) ? last : null);
+    }).catch(() => {});
   }, [userId, demo]);
+
+  const burned = api.stepsToKcal(steps, weightKg);
+
+  async function saveSteps() {
+    const n = Math.max(0, parseInt(stepsInput.replace(/\D/g, ''), 10) || 0);
+    setSavingSteps(true);
+    const { error } = await api.setSteps(ctx, n, dayISO);
+    setSavingSteps(false);
+    if (error) return notify('Erro', error);
+    setStepsVal(n);
+  }
 
   function shiftDay(delta: number) {
     const d = new Date(dayISO + 'T12:00:00');
@@ -239,6 +259,42 @@ export function CaloriesScreen() {
             </View>
           ))}
         </View>
+      </Card>
+
+      {/* Atividade — passos e gasto estimado */}
+      <Card style={{ marginTop: 12 }}>
+        <View style={styles.stepsHead}>
+          <View style={styles.stepsIcon}><Ionicons name="walk" size={18} color={colors.ringSteps} /></View>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.stepsTitle}>Passos {isToday ? 'de hoje' : `· ${dayLabel}`}</Text>
+            <Text style={styles.stepsSub}>Registre e veja o gasto estimado</Text>
+          </View>
+          <View style={{ alignItems: 'flex-end' }}>
+            <Text style={styles.burnedNum}>{burned}<Text style={styles.burnedUnit}> kcal</Text></Text>
+            <Text style={styles.stepsSub}>gasto por passos</Text>
+          </View>
+        </View>
+        <View style={styles.stepsRow}>
+          <TextInput
+            style={styles.stepsInput}
+            value={stepsInput}
+            onChangeText={(t) => setStepsInput(t.replace(/\D/g, ''))}
+            placeholder="0"
+            placeholderTextColor={colors.textMuted}
+            keyboardType="number-pad"
+            inputMode="numeric"
+          />
+          <Text style={styles.stepsUnit}>passos</Text>
+          <GoldButton label={savingSteps ? 'Salvando…' : 'Salvar'} onPress={saveSteps} small style={{ minWidth: 96 }} />
+        </View>
+        <View style={styles.saldoRow}>
+          <Text style={styles.saldoLabel}>Saldo do dia (consumo − gasto)</Text>
+          <Text style={styles.saldoVal}>{totals.kcal - burned} kcal</Text>
+        </View>
+        <Text style={styles.stepsFoot}>
+          Estimativa a partir do seu peso mais recente{weightKg ? ` (${weightKg} kg)` : ''}. Meça pelo app de saúde do
+          celular e digite aqui.
+        </Text>
       </Card>
 
       {/* Composer — apenas para o dia de hoje */}
@@ -441,4 +497,18 @@ const styles = StyleSheet.create({
   eKcal: { fontFamily: fonts.sansSemibold, fontSize: 15, color: colors.textPrimary },
 
   foot: { ...type.small, color: colors.textMuted, marginTop: 24, lineHeight: 18 },
+
+  stepsHead: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  stepsIcon: { width: 38, height: 38, borderRadius: 19, backgroundColor: colors.ringSteps + '22', alignItems: 'center', justifyContent: 'center' },
+  stepsTitle: { ...type.cardTitle, color: colors.textPrimary },
+  stepsSub: { ...type.small, color: colors.textSecondary, marginTop: 1 },
+  burnedNum: { fontFamily: fonts.serifBold, fontSize: 22, color: colors.ringSteps },
+  burnedUnit: { ...type.small, color: colors.textSecondary },
+  stepsRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 14 },
+  stepsInput: { flex: 1, backgroundColor: colors.surfaceMuted, borderRadius: 12, borderWidth: 1, borderColor: colors.border, color: colors.textPrimary, paddingHorizontal: 14, paddingVertical: 12, fontFamily: fonts.sansSemibold, fontSize: 18 },
+  stepsUnit: { ...type.small, color: colors.textSecondary },
+  saldoRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 14, paddingTop: 12, borderTopWidth: 1, borderTopColor: colors.border },
+  saldoLabel: { ...type.small, color: colors.textSecondary },
+  saldoVal: { fontFamily: fonts.sansSemibold, fontSize: 15, color: colors.textPrimary },
+  stepsFoot: { ...type.small, color: colors.textMuted, marginTop: 10, lineHeight: 17 },
 });

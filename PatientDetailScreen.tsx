@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, Pressable, TextInput } from 'react-native';
+import React, { useEffect, useState, useRef } from 'react';
+import { View, Text, StyleSheet, Pressable, TextInput, Platform, ActivityIndicator } from 'react-native';
 import { notify } from './notify';
 import { Ionicons } from '@expo/vector-icons';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
@@ -11,8 +11,44 @@ import { useAuth } from './AuthContext';
 import { roleMeta, appointmentMeta } from './helpers';
 import { AppointmentType } from './types';
 import * as api from './api';
-import { pickAndUpload, pickAndUploadPdf } from './storage';
+import { pickAndUpload, pickAndUploadPdf, uploadAudioBlob, signedUrl } from './storage';
+import { initAudio } from './bell';
 import { TeamStackParams } from './TeamNavigator';
+
+/** Player de áudio compacto para a conversa da equipe (web). */
+function TeamAudio({ path }: { path: string }) {
+  const [playing, setPlaying] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const ref = useRef<any>(null);
+  useEffect(() => () => { if (ref.current) { try { ref.current.pause(); } catch {} ref.current = null; } }, []);
+  async function toggle() {
+    if (Platform.OS !== 'web') return;
+    initAudio();
+    if (ref.current) {
+      if (playing) { ref.current.pause(); setPlaying(false); }
+      else { ref.current.play().catch(() => {}); setPlaying(true); }
+      return;
+    }
+    setLoading(true);
+    const u = await signedUrl('chat-audio', path);
+    setLoading(false);
+    if (!u) return;
+    try {
+      const a = new (window as any).Audio(u);
+      a.onended = () => setPlaying(false);
+      a.onpause = () => setPlaying(false);
+      a.onplay = () => setPlaying(true);
+      ref.current = a;
+      a.play().catch(() => {});
+    } catch {}
+  }
+  return (
+    <Pressable onPress={toggle} style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 2 }}>
+      {loading ? <ActivityIndicator size="small" color={colors.gold} /> : <Ionicons name={playing ? 'pause-circle' : 'play-circle'} size={24} color={colors.gold} />}
+      <Text style={{ fontFamily: fonts.sansMedium, fontSize: 13, color: colors.gold }}>Mensagem de voz</Text>
+    </Pressable>
+  );
+}
 
 function NumGrid({ fields, values, set }: { fields: [string, string][]; values: Record<string, string>; set: (k: string, v: string) => void }) {
   return (
@@ -144,6 +180,8 @@ export function PatientDetailScreen({ route, navigation }: Props) {
 
       <ChatBox ctx={ctx} patientId={id} role={role} />
 
+      <DiaryView ctx={ctx} patientId={id} />
+
       {canArea('medico') && <MedicoArea ctx={ctx} patientId={id} />}
       {canArea('nutricionista') && <NutriArea ctx={ctx} patientId={id} />}
       {canArea('psicologa') && <PsicoArea ctx={ctx} patientId={id} />}
@@ -152,12 +190,55 @@ export function PatientDetailScreen({ route, navigation }: Props) {
   );
 }
 
+// ---------------------------- DIÁRIO DO PACIENTE (leitura) ----------------------------
+const MOOD_EMOJI: Record<number, string> = { 1: '😞', 2: '😕', 3: '😐', 4: '🙂', 5: '😄' };
+function DiaryView({ ctx, patientId }: { ctx: api.Ctx; patientId: string }) {
+  const [entries, setEntries] = useState<api.DiaryEntry[]>([]);
+  const [expanded, setExpanded] = useState(false);
+  useEffect(() => { api.getDiaryEntries(ctx, 30, patientId).then(setEntries).catch(() => {}); }, [patientId]);
+  if (!entries.length) return null;
+  const shown = expanded ? entries : entries.slice(0, 4);
+  return (
+    <>
+      <SectionLabel>Diário do paciente</SectionLabel>
+      <Card>
+        {shown.map((e, i) => {
+          const d = new Date(e.day + 'T12:00:00').toLocaleDateString('pt-BR', { weekday: 'short', day: '2-digit', month: '2-digit' });
+          return (
+            <View key={e.day} style={[styles.diaryRow, i < shown.length - 1 && styles.diaryDiv]}>
+              <View style={styles.diaryHead}>
+                <Text style={styles.diaryDate}>{d}</Text>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                  {e.mood != null && <Text style={{ fontSize: 16 }}>{MOOD_EMOJI[e.mood] || ''}</Text>}
+                  {e.sleep != null && <Text style={styles.diarySleep}>{'🌙'.repeat(e.sleep)}</Text>}
+                </View>
+              </View>
+              {!!e.note && <Text style={styles.diaryNote}>{e.note}</Text>}
+            </View>
+          );
+        })}
+        {entries.length > 4 && (
+          <Pressable onPress={() => setExpanded((v) => !v)} style={{ paddingTop: 8 }}>
+            <Text style={styles.diaryMore}>{expanded ? 'ver menos' : `ver todos (${entries.length})`}</Text>
+          </Pressable>
+        )}
+      </Card>
+    </>
+  );
+}
+
 // ---------------------------- CHAT COM O PACIENTE ----------------------------
 function ChatBox({ ctx, patientId, role }: { ctx: api.Ctx; patientId: string; role: any }) {
   const [msgs, setMsgs] = useState<any[]>([]);
   const [text, setText] = useState('');
+  const [recording, setRecording] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const recRef = useRef<any>(null);
+  const chunksRef = useRef<any[]>([]);
+  const streamRef = useRef<any>(null);
   function load() { api.getMessages(ctx, patientId).then(setMsgs).catch(() => {}); }
   useEffect(() => { load(); }, [patientId]);
+  useEffect(() => () => { try { streamRef.current?.getTracks?.().forEach((t: any) => t.stop()); } catch {} }, []);
   async function enviar() {
     if (!text.trim()) return;
     const body = text.trim();
@@ -165,6 +246,37 @@ function ChatBox({ ctx, patientId, role }: { ctx: api.Ctx; patientId: string; ro
     await api.sendMessage(ctx, body, role, patientId).catch(() => {});
     load();
   }
+  const canRecord = Platform.OS === 'web' && typeof navigator !== 'undefined' && !!navigator.mediaDevices;
+  async function startRec() {
+    initAudio();
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      streamRef.current = stream;
+      const MR: any = (window as any).MediaRecorder;
+      let mime: string | undefined;
+      for (const t of ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg']) { try { if (MR.isTypeSupported(t)) { mime = t; break; } } catch {} }
+      const rec = new MR(stream, mime ? { mimeType: mime } : undefined);
+      chunksRef.current = [];
+      rec.ondataavailable = (e: any) => { if (e.data && e.data.size > 0) chunksRef.current.push(e.data); };
+      rec.onstop = async () => {
+        try { streamRef.current?.getTracks?.().forEach((t: any) => t.stop()); } catch {}
+        const chunks = chunksRef.current; chunksRef.current = [];
+        const recMime = rec.mimeType;
+        if (!chunks.length) return;
+        const blob = new (window as any).Blob(chunks, { type: recMime || chunks[0].type || 'audio/webm' });
+        if (blob.size < 800) return;
+        setUploading(true);
+        const up = await uploadAudioBlob(patientId, blob);
+        if (!up.error && up.path) await api.sendAudioMessage(ctx, up.path, role, patientId);
+        setUploading(false);
+        load();
+      };
+      recRef.current = rec;
+      rec.start();
+      setRecording(true);
+    } catch { setRecording(false); }
+  }
+  function stopRec() { setRecording(false); const rec = recRef.current; recRef.current = null; if (rec && rec.state !== 'inactive') { try { rec.stop(); } catch {} } }
   return (
     <>
       <SectionLabel>Conversa com o paciente</SectionLabel>
@@ -175,13 +287,31 @@ function ChatBox({ ctx, patientId, role }: { ctx: api.Ctx; patientId: string; ro
           return (
             <View key={m.id} style={[styles.msg, meu ? styles.msgMine : styles.msgTheirs]}>
               <Text style={styles.msgFrom}>{meu ? (m.sender_name || 'Equipe') : 'Paciente'}</Text>
-              <Text style={styles.msgBody}>{m.body}</Text>
+              {m.audio_path ? <TeamAudio path={m.audio_path} /> : <Text style={styles.msgBody}>{m.body}</Text>}
             </View>
           );
         })}
-        <View style={{ flexDirection: 'row', gap: 8, marginTop: 10 }}>
-          <TextInput style={[styles.input, { flex: 1 }]} placeholder="Escreva uma mensagem…" placeholderTextColor={colors.textMuted} value={text} onChangeText={setText} />
-          <Pressable onPress={enviar} style={styles.sendBtn}><Ionicons name="send" size={18} color={colors.textOnGold} /></Pressable>
+        <View style={{ flexDirection: 'row', gap: 8, marginTop: 10, alignItems: 'center' }}>
+          {recording ? (
+            <>
+              <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <View style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: colors.danger }} />
+                <Text style={styles.sub}>Gravando… toque para enviar</Text>
+              </View>
+              <Pressable onPress={stopRec} style={styles.sendBtn}><Ionicons name="checkmark" size={18} color={colors.textOnGold} /></Pressable>
+            </>
+          ) : (
+            <>
+              <TextInput style={[styles.input, { flex: 1 }]} placeholder={uploading ? 'Enviando áudio…' : 'Escreva uma mensagem…'} placeholderTextColor={colors.textMuted} value={text} onChangeText={setText} editable={!uploading} />
+              {text.trim().length > 0 ? (
+                <Pressable onPress={enviar} style={styles.sendBtn}><Ionicons name="send" size={18} color={colors.textOnGold} /></Pressable>
+              ) : canRecord ? (
+                <Pressable onPress={startRec} style={styles.sendBtn} disabled={uploading}>{uploading ? <ActivityIndicator size="small" color={colors.textOnGold} /> : <Ionicons name="mic" size={18} color={colors.textOnGold} />}</Pressable>
+              ) : (
+                <Pressable onPress={enviar} style={styles.sendBtn}><Ionicons name="send" size={18} color={colors.textOnGold} /></Pressable>
+              )}
+            </>
+          )}
         </View>
       </Card>
     </>
@@ -580,6 +710,13 @@ function EducadorArea({ ctx, patientId }: { ctx: api.Ctx; patientId: string }) {
 }
 
 const styles = StyleSheet.create({
+  diaryRow: { paddingVertical: 8 },
+  diaryDiv: { borderBottomWidth: 1, borderBottomColor: colors.border },
+  diaryHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  diaryDate: { fontFamily: fonts.sansSemibold, fontSize: 12, color: colors.gold, textTransform: 'capitalize' },
+  diarySleep: { fontSize: 11 },
+  diaryNote: { ...type.small, color: colors.textPrimary, marginTop: 4, lineHeight: 18 },
+  diaryMore: { ...type.small, color: colors.gold, textDecorationLine: 'underline' },
   topbar: { flexDirection: 'row', alignItems: 'center', marginBottom: 16 },
   name: { fontFamily: fonts.serifBold, fontSize: 24, color: colors.textPrimary },
   sub: { ...type.small, color: colors.textSecondary },

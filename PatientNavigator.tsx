@@ -5,6 +5,7 @@ import { PatientTabs } from './PatientTabs';
 import { WaterScreen } from './WaterScreen';
 import { WorkoutScreen } from './WorkoutScreen';
 import { ChatScreen } from './ChatScreen';
+import { DiaryScreen } from './DiaryScreen';
 import { NudgeListener } from './NudgeListener';
 import { WaterReminder } from './WaterReminder';
 import { AchievementWatcher } from './AchievementWatcher';
@@ -14,6 +15,7 @@ export type PatientStackParams = {
   Agua: undefined;
   Treino: undefined;
   Chat: undefined;
+  Diario: undefined;
 };
 
 const Stack = createNativeStackNavigator<PatientStackParams>();
@@ -26,6 +28,7 @@ export function PatientNavigator() {
         <Stack.Screen name="Agua" component={WaterScreen} />
         <Stack.Screen name="Treino" component={WorkoutScreen} />
         <Stack.Screen name="Chat" component={ChatScreen} />
+        <Stack.Screen name="Diario" component={DiaryScreen} />
       </Stack.Navigator>
       <NudgeListener />
       <WaterReminder />

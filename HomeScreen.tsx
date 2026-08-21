@@ -16,15 +16,15 @@ import { appointmentMeta, formatDateTime, daysUntil } from './helpers';
 const WATER_TARGET = 2500;
 const CAL_TARGET = 1800;
 
-function GoalRing({ label, current, target, color }: { label: string; current: number; target: number; color: string }) {
+function GoalRing({ label, current, target, color, onPress }: { label: string; current: number; target: number; color: string; onPress?: () => void }) {
   return (
-    <View style={{ alignItems: 'center', width: '25%' }}>
+    <Pressable disabled={!onPress} onPress={onPress} style={{ alignItems: 'center', width: '25%' }}>
       <ProgressRing size={68} stroke={7} progress={target ? current / target : 0} color={color}>
         <Ionicons name={label === 'Água' ? 'water' : label === 'Passos' ? 'walk' : label === 'Treino' ? 'barbell' : 'flame'} size={18} color={color} />
       </ProgressRing>
       <Text style={styles.ringVal}>{current >= 1000 ? `${(current / 1000).toFixed(1)}k` : current}</Text>
       <Text style={styles.ringLabel}>{label}</Text>
-    </View>
+    </Pressable>
   );
 }
 
@@ -36,6 +36,7 @@ export function HomeScreen() {
 
   const [water, setWater] = useState(0);
   const [calories, setCalories] = useState(0);
+  const [steps, setSteps] = useState(0);
   const [workoutDone, setWorkoutDone] = useState(0);
   const [weights, setWeights] = useState<WeightMeasure[]>([]);
   const [bio, setBio] = useState<any[]>([]);
@@ -46,6 +47,7 @@ export function HomeScreen() {
   useEffect(() => {
     api.getWaterToday(ctx).then(setWater).catch(() => {});
     api.getMealsToday(ctx).then((m) => setCalories(m.reduce((s, x) => s + (x.calories || 0), 0))).catch(() => {});
+    api.getStepsToday(ctx).then(setSteps).catch(() => {});
     api.getWorkoutToday(ctx).then((w) => setWorkoutDone(w?.items?.length ? 1 : 0)).catch(() => {});
     api.getWeightHistory(ctx).then(setWeights).catch(() => {});
     api.getBioSeries(ctx).then(setBio).catch(() => {});
@@ -95,6 +97,7 @@ export function HomeScreen() {
 
       <View style={styles.quickRow}>
         {[
+          { label: 'Diário', icon: 'book', to: 'Diario' },
           { label: 'Água', icon: 'water', to: 'Agua' },
           { label: 'Treino', icon: 'barbell', to: 'Treino' },
           { label: 'Chat', icon: 'chatbubbles', to: 'Chat' },
@@ -111,7 +114,7 @@ export function HomeScreen() {
         <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
           <GoalRing label="Água" current={water} target={WATER_TARGET} color={colors.ringWater} />
           <GoalRing label="Calorias" current={calories} target={CAL_TARGET} color={colors.ringCalories} />
-          <GoalRing label="Passos" current={0} target={8000} color={colors.ringSteps} />
+          <GoalRing label="Passos" current={steps} target={8000} color={colors.ringSteps} onPress={() => nav.navigate('Calorias')} />
           <GoalRing label="Treino" current={workoutDone} target={1} color={colors.ringWorkout} />
         </View>
       </Card>
