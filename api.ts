@@ -400,33 +400,89 @@ export async function getBodyProfile(ctx: Ctx, patientId?: string): Promise<{ se
   return { sex: (data?.sex as any) ?? null, birth_date: data?.birth_date ?? null };
 }
 
+export interface Composition {
+  bodyFatPct: number | null;   // % de gordura
+  fatMassKg: number | null;    // massa gorda (kg)
+  leanMassKg: number | null;   // massa magra / livre de gordura (kg)
+  muscleKg: number | null;     // massa muscular esquelética (kg)
+  estimated: boolean;          // true = algum valor foi calculado (não medido)
+}
+
+function ageAt(birthDate: string | null, when: Date): number | null {
+  if (!birthDate) return null;
+  const bd = new Date(birthDate + 'T00:00:00');
+  let age = when.getFullYear() - bd.getFullYear();
+  const mDiff = when.getMonth() - bd.getMonth();
+  if (mDiff < 0 || (mDiff === 0 && when.getDate() < bd.getDate())) age--;
+  return age > 0 && age <= 120 ? age : null;
+}
+
 /**
- * Massa de gordura de uma medição.
- * Usa o valor MEDIDO (fat_mass_kg) quando existir; senão ESTIMA por Deurenberg
- * (%GC = 1,20·IMC + 0,23·idade − 10,8·sexo − 5,4; sexo M=1, F=0) quando houver
- * IMC, sexo e idade. Retorna { kg, estimated } ou null se não der para calcular.
+ * Composição corporal de uma medição. Usa os valores MEDIDOS (BIA) quando existirem;
+ * caso contrário CALCULA por fórmulas antropométricas validadas:
+ *  - % de gordura: RFM (Relative Fat Mass, Woolcock 2018) = 64 − 20·(altura/cintura) + 12·(F?1:0),
+ *    usando a cintura; sem cintura, cai para Deurenberg (IMC + idade + sexo).
+ *  - massa gorda = peso × %gordura/100.
+ *  - massa magra (livre de gordura) = peso − massa gorda.
+ *  - massa muscular esquelética (SMM, Lee 2000) = 0,244·peso + 7,80·altura(m) − 0,098·idade + 6,6·(M?1:0) − 3,3.
+ * Valores calculados vêm marcados com estimated = true.
  */
+export function computeComposition(
+  row: any,
+  sex: 'M' | 'F' | null,
+  birthDate: string | null
+): Composition {
+  const out: Composition = { bodyFatPct: null, fatMassKg: null, leanMassKg: null, muscleKg: null, estimated: false };
+  const weight = Number(row?.weight_kg);
+  const bmi = Number(row?.bmi);
+  const waist = Number(row?.waist_cm);
+  let height = Number(row?.height_cm);
+  if (isNaN(height) && !isNaN(weight) && !isNaN(bmi) && bmi > 0) height = Math.sqrt((weight / bmi)) * 100; // deriva altura do IMC
+  const when = row?.measured_at ? new Date(row.measured_at) : new Date();
+  const age = ageAt(birthDate, when);
+  const round1 = (n: number) => Math.round(n * 10) / 10;
+
+  // % de gordura
+  const measPct = Number(row?.body_fat_pct);
+  if (!isNaN(measPct) && measPct > 0) {
+    out.bodyFatPct = round1(measPct);
+  } else if (sex && !isNaN(height) && !isNaN(waist) && waist > 0) {
+    const rfm = 64 - 20 * (height / waist) + (sex === 'F' ? 12 : 0);
+    if (rfm > 3 && rfm < 70) { out.bodyFatPct = round1(rfm); out.estimated = true; }
+  } else if (sex && age != null && !isNaN(bmi)) {
+    const bf = 1.2 * bmi + 0.23 * age - 10.8 * (sex === 'M' ? 1 : 0) - 5.4;
+    if (bf > 3 && bf < 70) { out.bodyFatPct = round1(bf); out.estimated = true; }
+  }
+
+  // massa gorda
+  const measFat = Number(row?.fat_mass_kg);
+  if (!isNaN(measFat) && measFat > 0) out.fatMassKg = round1(measFat);
+  else if (out.bodyFatPct != null && !isNaN(weight)) { out.fatMassKg = round1((weight * out.bodyFatPct) / 100); out.estimated = true; }
+
+  // massa magra (livre de gordura)
+  const measLean = Number(row?.lean_mass_kg);
+  if (!isNaN(measLean) && measLean > 0) out.leanMassKg = round1(measLean);
+  else if (out.fatMassKg != null && !isNaN(weight)) { out.leanMassKg = round1(weight - out.fatMassKg); out.estimated = true; }
+
+  // massa muscular esquelética (SMM)
+  const measMus = Number(row?.skeletal_muscle_kg ?? row?.muscle_mass_kg);
+  if (!isNaN(measMus) && measMus > 0) out.muscleKg = round1(measMus);
+  else if (sex && age != null && !isNaN(weight) && !isNaN(height)) {
+    const smm = 0.244 * weight + 7.80 * (height / 100) - 0.098 * age + (sex === 'M' ? 6.6 : 0) - 3.3;
+    if (smm > 5 && smm < 80) { out.muscleKg = round1(smm); out.estimated = true; }
+  }
+
+  return out;
+}
+
+/** Massa de gordura de uma medição (compat.: usa computeComposition). */
 export function fatMassOf(
   row: any,
   sex: 'M' | 'F' | null,
   birthDate: string | null
 ): { kg: number; estimated: boolean } | null {
-  const measured = Number(row?.fat_mass_kg);
-  if (!isNaN(measured) && measured > 0) return { kg: measured, estimated: false };
-  const weight = Number(row?.weight_kg);
-  const bmi = Number(row?.bmi);
-  const pct = Number(row?.body_fat_pct);
-  if (!isNaN(pct) && pct > 0 && !isNaN(weight)) return { kg: Math.round((weight * pct) / 100 * 10) / 10, estimated: false };
-  if (!sex || !birthDate || isNaN(bmi) || isNaN(weight)) return null;
-  const when = row?.measured_at ? new Date(row.measured_at) : new Date();
-  const bd = new Date(birthDate + 'T00:00:00');
-  let age = when.getFullYear() - bd.getFullYear();
-  const mDiff = when.getMonth() - bd.getMonth();
-  if (mDiff < 0 || (mDiff === 0 && when.getDate() < bd.getDate())) age--;
-  if (age <= 0 || age > 120) return null;
-  const bf = 1.2 * bmi + 0.23 * age - 10.8 * (sex === 'M' ? 1 : 0) - 5.4;
-  if (bf <= 0 || bf > 70) return null;
-  return { kg: Math.round((weight * bf) / 100 * 10) / 10, estimated: true };
+  const c = computeComposition(row, sex, birthDate);
+  return c.fatMassKg == null ? null : { kg: c.fatMassKg, estimated: c.estimated };
 }
 
 export async function addBioimpedance(ctx: Ctx, patientId: string, input: Record<string, any>): Promise<{ error?: string }> {

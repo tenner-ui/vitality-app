@@ -8,7 +8,7 @@ import { LineChart } from './LineChart';
 import { colors } from './colors';
 import { fonts, type } from './typography';
 import { useAuth } from './AuthContext';
-import { getBioSeries, getCardioReports, getLabResults, getPhotos, getStreakInfo, getBodyProfile, fatMassOf } from './api';
+import { getBioSeries, getCardioReports, getLabResults, getPhotos, getStreakInfo, getBodyProfile, fatMassOf, computeComposition } from './api';
 import { pickAndUpload, signedUrl } from './storage';
 import { addPhoto } from './api';
 import { achievements, weightTrend } from './mock';
@@ -115,6 +115,9 @@ function CorpoSection({ ctx }: { ctx: any }) {
   const lastFat = fatCurve.length ? fatCurve[fatCurve.length - 1].value : null;
   const fatLost = firstFat != null && lastFat != null ? Math.round((firstFat - lastFat) * 10) / 10 : null;
 
+  // Composição corporal do exame mais recente (medida ou calculada)
+  const comp = computeComposition(latest, bodyProf.sex, bodyProf.birth_date);
+
   return (
     <View>
       <SectionLabel>Antes e depois</SectionLabel>
@@ -157,12 +160,20 @@ function CorpoSection({ ctx }: { ctx: any }) {
       </View>
       <Text style={styles.note}>Peso inicial ao lado do atual. Atualizado a cada nova bioimpedância.</Text>
 
-      <SectionLabel>Composição corporal</SectionLabel>
+      <SectionLabel>Composição corporal{comp.estimated ? ' · calculada' : ''}</SectionLabel>
       <View style={{ flexDirection: 'row', gap: 12 }}>
+        <StatTile label="% Gordura" value={comp.bodyFatPct != null ? String(comp.bodyFatPct) : '—'} unit="%" />
+        <StatTile label="Massa gorda" value={comp.fatMassKg != null ? String(comp.fatMassKg) : '—'} unit="kg" />
+        <StatTile label="Massa magra" value={comp.leanMassKg != null ? String(comp.leanMassKg) : '—'} unit="kg" />
+      </View>
+      <View style={{ flexDirection: 'row', gap: 12, marginTop: 12 }}>
+        <StatTile label="M. muscular" value={comp.muscleKg != null ? String(comp.muscleKg) : '—'} unit="kg" />
         <StatTile label="IMC" value={latest.bmi != null ? String(latest.bmi) : '—'} unit="" />
-        <StatTile label="% Gordura" value={latest.body_fat_pct != null ? String(latest.body_fat_pct) : '—'} unit="%" />
         <StatTile label="TMB" value={latest.bmr_kcal != null ? String(latest.bmr_kcal) : '—'} unit="kcal" />
       </View>
+      {comp.estimated && (
+        <Text style={styles.note}>Composição calculada por antropometria (RFM para gordura · Lee para músculo) quando a bioimpedância não traz os valores medidos. São estimativas para acompanhamento, não substituem a BIA.</Text>
+      )}
 
       <SectionLabel>Curva de peso e gordura</SectionLabel>
       {weightCurve.length > 0 ? (
@@ -227,17 +238,48 @@ const BIA_METRICS = [
   { key: 'metabolic_age', label: 'Idade metabólica', unit: 'anos' },
 ];
 
+// Métricas derivadas que podem ser calculadas quando a BIA não traz o valor medido.
+const DERIVED: Record<string, 'bodyFatPct' | 'fatMassKg' | 'leanMassKg' | 'muscleKg'> = {
+  body_fat_pct: 'bodyFatPct',
+  fat_mass_kg: 'fatMassKg',
+  lean_mass_kg: 'leanMassKg',
+  muscle_mass_kg: 'muscleKg',
+  skeletal_muscle_kg: 'muscleKg',
+};
+
 function BioSection({ ctx }: { ctx: any }) {
   const [rows, setRows] = useState<any[]>([]);
   const [metric, setMetric] = useState('body_fat_pct');
-  useEffect(() => { getBioSeries(ctx).then(setRows).catch(() => {}); }, []);
+  const [bodyProf, setBodyProf] = useState<{ sex: 'M' | 'F' | null; birth_date: string | null }>({ sex: null, birth_date: null });
+  useEffect(() => {
+    getBioSeries(ctx).then(setRows).catch(() => {});
+    getBodyProfile(ctx).then(setBodyProf).catch(() => {});
+  }, []);
+
+  const short = (s?: string) => (s ? new Date(s).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }) : '');
+  // valor de um campo: medido, ou calculado (para as métricas derivadas)
+  const valOf = (r: any, key: string): number | null => {
+    const raw = Number(r?.[key]);
+    if (!isNaN(raw)) return raw;
+    const dk = DERIVED[key];
+    if (dk) { const c = computeComposition(r, bodyProf.sex, bodyProf.birth_date); return (c as any)[dk]; }
+    return null;
+  };
+  const anyEstimated = rows.some((r) => {
+    const c = computeComposition(r, bodyProf.sex, bodyProf.birth_date);
+    return c.estimated;
+  });
+
   const latest = rows[rows.length - 1] || {};
   const first = rows[0] || {};
   const m = BIA_METRICS.find((x) => x.key === metric)!;
-  const chart = rows.map((r, i) => ({ label: r.label ?? `#${i + 1}`, value: Number(r[metric]) })).filter((p) => !isNaN(p.value));
+  const chart = rows
+    .map((r, i) => ({ label: r.measured_at ? short(r.measured_at) : `#${i + 1}`, value: valOf(r, metric) }))
+    .filter((p) => p.value != null && !isNaN(p.value as number)) as { label: string; value: number }[];
+  const fmt = (r: any, k: string, dec = 1) => { const v = valOf(r, k); return v == null ? '—' : (Number.isInteger(v) ? String(v) : v.toFixed(dec)); };
   const delta = (k: string) => {
-    const a = Number(first[k]); const b = Number(latest[k]);
-    if (isNaN(a) || isNaN(b)) return null;
+    const a = valOf(first, k); const b = valOf(latest, k);
+    if (a == null || b == null) return null;
     const d = b - a; return `${d >= 0 ? '+' : ''}${d.toFixed(1)}`;
   };
 
@@ -247,19 +289,19 @@ function BioSection({ ctx }: { ctx: any }) {
     <View>
       <SectionLabel>Resumo atual (BIA{latest.device ? ` · ${latest.device}` : ''})</SectionLabel>
       <View style={{ flexDirection: 'row', gap: 12 }}>
-        <StatTile label="Peso" value={String(latest.weight_kg)} unit="kg" hint={delta('weight_kg') && `${delta('weight_kg')} kg`} />
-        <StatTile label="% Gordura" value={String(latest.body_fat_pct)} unit="%" hint={delta('body_fat_pct') && `${delta('body_fat_pct')} pp`} />
-        <StatTile label="M. muscular" value={String(latest.muscle_mass_kg)} unit="kg" hint={delta('muscle_mass_kg') && `${delta('muscle_mass_kg')} kg`} />
+        <StatTile label="Peso" value={fmt(latest, 'weight_kg')} unit="kg" hint={delta('weight_kg') && `${delta('weight_kg')} kg`} />
+        <StatTile label="% Gordura" value={fmt(latest, 'body_fat_pct')} unit="%" hint={delta('body_fat_pct') && `${delta('body_fat_pct')} pp`} />
+        <StatTile label="M. muscular" value={fmt(latest, 'muscle_mass_kg')} unit="kg" hint={delta('muscle_mass_kg') && `${delta('muscle_mass_kg')} kg`} />
       </View>
       <View style={{ flexDirection: 'row', gap: 12, marginTop: 12 }}>
-        <StatTile label="Água" value={String(latest.body_water_pct)} unit="%" />
-        <StatTile label="Visceral" value={String(latest.visceral_fat)} unit="nível" />
-        <StatTile label="Âng. fase" value={String(latest.phase_angle)} unit="°" />
+        <StatTile label="Massa gorda" value={fmt(latest, 'fat_mass_kg')} unit="kg" />
+        <StatTile label="Massa magra" value={fmt(latest, 'lean_mass_kg')} unit="kg" />
+        <StatTile label="IMC" value={fmt(latest, 'bmi')} unit="" />
       </View>
       <View style={{ flexDirection: 'row', gap: 12, marginTop: 12 }}>
-        <StatTile label="TMB" value={String(latest.bmr_kcal)} unit="kcal" />
-        <StatTile label="Idade metab." value={String(latest.metabolic_age)} unit="anos" hint={delta('metabolic_age') && `${delta('metabolic_age')} anos`} />
-        <StatTile label="Massa magra" value={String(latest.lean_mass_kg)} unit="kg" />
+        <StatTile label="Água" value={fmt(latest, 'body_water_pct')} unit="%" />
+        <StatTile label="Visceral" value={fmt(latest, 'visceral_fat')} unit="nível" />
+        <StatTile label="TMB" value={fmt(latest, 'bmr_kcal', 0)} unit="kcal" />
       </View>
 
       <SectionLabel>Evolução</SectionLabel>
@@ -267,10 +309,15 @@ function BioSection({ ctx }: { ctx: any }) {
         {BIA_METRICS.map((x) => <Pill key={x.key} label={x.label} active={metric === x.key} onPress={() => setMetric(x.key)} />)}
       </ScrollView>
       <Card>
-        <Text style={styles.chartTitle}>{m.label} ({m.unit})</Text>
+        <Text style={styles.chartTitle}>{m.label} ({m.unit}){DERIVED[metric] && anyEstimated ? ' · calculado' : ''}</Text>
         <LineChart data={chart} unit={m.unit} color={colors.gold} />
+        {chart.length === 0 && <Text style={styles.small}>Este parâmetro não vem nos laudos e não pode ser calculado com os dados atuais.</Text>}
       </Card>
-      <Text style={styles.note}>A equipe (Educador Físico) lança cada avaliação de BIA; os pontos formam a curva de evolução durante e ao final do protocolo.</Text>
+      <Text style={styles.note}>
+        {anyEstimated
+          ? 'Gordura, massa gorda, massa magra e massa muscular são calculadas por antropometria (RFM · Lee) quando a BIA não traz o valor medido — estimativas para acompanhamento. Água, visceral e ângulo de fase só aparecem com a BIA completa.'
+          : 'A equipe (Educador Físico) lança cada avaliação de BIA; os pontos formam a curva de evolução durante e ao final do protocolo.'}
+      </Text>
     </View>
   );
 }

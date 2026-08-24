@@ -107,9 +107,11 @@ export function PatientDetailScreen({ route, navigation }: Props) {
   const [water, setWater] = useState(0);
   const [meals, setMeals] = useState<any[]>([]);
   const [active, setActive] = useState<boolean | null>(null);
+  const [bodyProf, setBodyProf] = useState<{ sex: 'M' | 'F' | null; birth_date: string | null }>({ sex: null, birth_date: null });
 
   useEffect(() => {
     api.getBioSeries(ctx, id).then((s) => setBio(s.length ? s[s.length - 1] : null)).catch(() => {});
+    api.getBodyProfile(ctx, id).then(setBodyProf).catch(() => {});
     api.getWeightHistory(ctx, id).then(setWeights).catch(() => {});
     api.getWaterToday(ctx, id).then(setWater).catch(() => {});
     api.getMealsToday(ctx, id).then(setMeals).catch(() => {});
@@ -125,6 +127,8 @@ export function PatientDetailScreen({ route, navigation }: Props) {
   }
 
   const val = (v: any) => (v == null ? '—' : String(v));
+  const compVal = (v: number | null) => (v == null ? '—' : (Number.isInteger(v) ? String(v) : v.toFixed(1)));
+  const comp = api.computeComposition(bio || {}, bodyProf.sex, bodyProf.birth_date);
   const weightCurve = weights.map((w, i) => ({ label: `#${i + 1}`, value: Number(w.weight_kg) })).filter((p) => !isNaN(p.value));
   const kcalHoje = meals.reduce((s, m) => s + (m.calories || 0), 0);
 
@@ -170,13 +174,19 @@ export function PatientDetailScreen({ route, navigation }: Props) {
         )}
       </View>
 
-      <SectionLabel>Composição corporal (última avaliação)</SectionLabel>
+      <SectionLabel>Composição corporal (última avaliação){bio && comp.estimated ? ' · calculada' : ''}</SectionLabel>
       <View style={{ flexDirection: 'row', gap: 12 }}>
         <StatTile label="Peso" value={val(bio?.weight_kg)} unit="kg" />
-        <StatTile label="% Gordura" value={val(bio?.body_fat_pct)} unit="%" />
+        <StatTile label="% Gordura" value={compVal(comp.bodyFatPct)} unit="%" />
         <StatTile label="Cintura" value={val(bio?.waist_cm)} unit="cm" />
       </View>
+      <View style={{ flexDirection: 'row', gap: 12, marginTop: 12 }}>
+        <StatTile label="Massa gorda" value={compVal(comp.fatMassKg)} unit="kg" />
+        <StatTile label="Massa magra" value={compVal(comp.leanMassKg)} unit="kg" />
+        <StatTile label="M. muscular" value={compVal(comp.muscleKg)} unit="kg" />
+      </View>
       {!bio && <Text style={[styles.sub, { marginTop: 8 }]}>Sem bioimpedância registrada ainda — registre na área do Educador Físico.</Text>}
+      {bio && comp.estimated && <Text style={[styles.sub, { marginTop: 8 }]}>Valores calculados por antropometria (RFM · Lee) quando a BIA não traz o medido.</Text>}
 
       <ChatBox ctx={ctx} patientId={id} role={role} />
 
