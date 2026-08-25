@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, Pressable, TextInput, ScrollView } from 'react-
 import { Ionicons } from '@expo/vector-icons';
 import { Screen, Card, SectionLabel, GoldButton } from './ui';
 import { Header } from './Header';
+import { useNavigation } from '@react-navigation/native';
 import { colors } from './colors';
 import { fonts, type } from './typography';
 import { notify } from './notify';
@@ -30,6 +31,7 @@ const PROMPTS = [
 
 export function DiaryScreen() {
   const { demo, userId } = useAuth();
+  const navigation = useNavigation();
   const ctx = { demo, patientId: userId };
 
   const todayISO = ymd(new Date());
@@ -81,7 +83,7 @@ export function DiaryScreen() {
 
   return (
     <Screen>
-      <Header title="Diário" subtitle="Seu registro do dia" rightIcon="book-outline" />
+      <Header title="Diário" subtitle="Seu registro do dia" rightIcon="book-outline" onBack={() => navigation.goBack()} />
 
       {/* Navegador de dias */}
       <View style={styles.dayNav}>

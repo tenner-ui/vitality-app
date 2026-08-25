@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { View, Text, StyleSheet, Pressable, Switch } from 'react-native';
 import { notify } from './notify';
 import { Ionicons } from '@expo/vector-icons';
@@ -47,23 +47,44 @@ export function WaterScreen() {
   const cups = Math.round(ml / 250);
   const maxWeek = Math.max(...waterWeek, target / 1000);
 
-  async function toggleReminder(i: number) {
-    const next = [...reminders];
-    const r = next[i];
-    if (!r.on) {
-      const ok = await ensurePermissions();
-      if (!ok) {
-        notify('Notificações', 'Permita notificações para receber lembretes de hidratação.');
-        return;
+  // Agenda os lembretes que já vêm ligados (senão eles ficavam "ligados" mas nunca disparavam).
+  const scheduledOnce = useRef(false);
+  useEffect(() => {
+    if (scheduledOnce.current) return;
+    scheduledOnce.current = true;
+    (async () => {
+      await ensurePermissions().catch(() => {});
+      setReminders((prev) => prev.map((r) => r));
+      for (let i = 0; i < reminders.length; i++) {
+        const r = reminders[i];
+        if (r.on && !r.id) {
+          try {
+            const id = await scheduleWaterReminder(r.hour, r.minute);
+            setReminders((prev) => prev.map((x, idx) => (idx === i ? { ...x, id } : x)));
+          } catch {}
+        }
       }
-      r.id = await scheduleWaterReminder(r.hour, r.minute);
-      r.on = true;
+    })();
+  }, []);
+
+  async function toggleReminder(i: number) {
+    // O toggle SEMPRE alterna na hora (nunca fica "travado").
+    const turningOn = !reminders[i].on;
+    setReminders((prev) => prev.map((x, idx) => (idx === i ? { ...x, on: turningOn } : x)));
+
+    const r = reminders[i];
+    if (turningOn) {
+      await ensurePermissions().catch(() => {});
+      try {
+        const id = await scheduleWaterReminder(r.hour, r.minute);
+        setReminders((prev) => prev.map((x, idx) => (idx === i ? { ...x, id } : x)));
+      } catch {
+        notify('Lembrete', 'Não consegui agendar a notificação, mas o lembrete sonoro no app continua ativo.');
+      }
     } else {
-      if (r.id) await cancelReminder(r.id);
-      r.id = '';
-      r.on = false;
+      if (r.id) await cancelReminder(r.id).catch(() => {});
+      setReminders((prev) => prev.map((x, idx) => (idx === i ? { ...x, id: '' } : x)));
     }
-    setReminders(next);
   }
 
   return (

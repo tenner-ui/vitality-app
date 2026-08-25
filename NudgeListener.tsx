@@ -3,7 +3,7 @@ import { View, Text, StyleSheet, Pressable, Animated } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { supabase, supabaseConfigured } from './supabase';
 import { useAuth } from './AuthContext';
-import { playBell, initAudio, armAudioUnlock } from './bell';
+import { playBell, initAudio, armAudioUnlock, buzz } from './bell';
 import { colors } from './colors';
 import { fonts, type } from './typography';
 
@@ -20,11 +20,23 @@ export function NudgeListener() {
     if (!supabaseConfigured || demo || !userId || userId === 'demo') return;
     armAudioUnlock();
     initAudio();
+    // Pede permissão de notificação do navegador (best-effort) para o alerta aparecer
+    // mesmo com o app em segundo plano.
+    try {
+      const N: any = (globalThis as any).Notification;
+      if (N && N.permission === 'default') N.requestPermission?.().catch?.(() => {});
+    } catch {}
     const ch = supabase
       .channel(`nudges:${userId}`)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'nudges', filter: `patient_id=eq.${userId}` }, (payload: any) => {
+        const body = payload.new?.body || 'Sua equipe está chamando sua atenção 🔔';
         playBell();
-        setMsg(payload.new?.body || 'Sua equipe está chamando sua atenção 🔔');
+        buzz([150, 80, 150]);
+        try {
+          const N: any = (globalThis as any).Notification;
+          if (N && N.permission === 'granted') new N('Instituto Vitality 🔔', { body, tag: 'vitality-nudge' });
+        } catch {}
+        setMsg(body);
       })
       .subscribe();
     return () => { supabase.removeChannel(ch); };

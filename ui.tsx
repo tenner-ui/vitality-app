@@ -27,7 +27,7 @@ export function Screen({
   ...rest
 }: { children: React.ReactNode; scroll?: boolean; contentStyle?: ViewStyle } & ScrollViewProps) {
   const { isTeam } = useAuth();
-  const topClear = isTeam ? 46 : 0; // espaço para o seletor Paciente/Profissional flutuante
+  const topClear = isTeam ? 64 : 0; // espaço para o seletor Paciente/Profissional flutuante (garante o texto sempre abaixo dele)
   // Fade + leve subida no mount → transição mais fluida entre telas.
   const op = useRef(new Animated.Value(0)).current;
   const ty = useRef(new Animated.Value(8)).current;

@@ -12,6 +12,7 @@ import { Message } from './types';
 import { useAuth } from './AuthContext';
 import { getMessages, sendMessage, sendAudioMessage } from './api';
 import { uploadAudioBlob, signedUrl } from './storage';
+import { notify } from './notify';
 import { supabase, supabaseConfigured } from './supabase';
 import { playBell, armAudioUnlock, initAudio } from './bell';
 
@@ -166,9 +167,13 @@ export function ChatScreen() {
       setRecSecs(0);
       stopTimer();
       timerRef.current = setInterval(() => setRecSecs((s) => (s >= 300 ? s : s + 1)), 1000);
-    } catch (e) {
+    } catch (e: any) {
       setRecording(false);
       stopStream();
+      const msg = e?.name === 'NotAllowedError'
+        ? 'Permita o acesso ao microfone no navegador para gravar áudio.'
+        : 'Não foi possível iniciar a gravação: ' + (e?.message || 'erro');
+      notify('Áudio', msg);
     }
   }
 
@@ -198,15 +203,16 @@ export function ChatScreen() {
     chunksRef.current = [];
     recRef.current = null;
     setRecSecs(0);
-    if (!chunks.length) return;
+    if (!chunks.length) { notify('Áudio', 'Nada foi gravado. Tente novamente.'); return; }
     const type = recMime || (chunks[0] && chunks[0].type) || 'audio/webm';
     const blob = new (window as any).Blob(chunks, { type });
-    if (blob.size < 800) return; // muito curto/silêncio
+    if (blob.size < 800) { notify('Áudio', 'Gravação muito curta — segure para gravar por mais tempo.'); return; }
     setUploading(true);
     const up = await uploadAudioBlob(userId, blob);
-    if (up.error || !up.path) { setUploading(false); return; }
-    await sendAudioMessage(ctx, up.path, role);
+    if (up.error || !up.path) { setUploading(false); notify('Áudio', up.error || 'Falha ao enviar o áudio.'); return; }
+    const sent = await sendAudioMessage(ctx, up.path, role);
     setUploading(false);
+    if (sent.error) { notify('Áudio', sent.error); return; }
     setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 150);
   }
 

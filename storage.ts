@@ -30,19 +30,41 @@ export async function pickAndUpload(
     return { error: 'Disponível apenas em conta real (não no modo demonstração).' };
   }
 
-  // Na web não precisamos de permissão de galeria (abre o seletor de arquivos do navegador,
-  // que no celular também permite tirar foto na hora). No nativo, pedimos permissão.
-  if (Platform.OS !== 'web') {
-    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!perm.granted) return { error: 'Permissão de galeria negada.' };
+  // WEB/PWA: usamos o seletor de arquivos nativo do navegador (accept=image/*, capture
+  // no celular abre a câmera). É bem mais confiável que o expo-image-picker na web.
+  if (Platform.OS === 'web' && typeof document !== 'undefined') {
+    const file: File | null = await new Promise((resolve) => {
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = 'image/*';
+      (input as any).capture = 'environment';
+      input.onchange = () => resolve(input.files && input.files[0] ? input.files[0] : null);
+      input.oncancel = () => resolve(null);
+      input.click();
+    });
+    if (!file) return { canceled: true };
+    const ext = extFrom(file.name, file.type);
+    const contentType = file.type || `image/${ext === 'jpg' ? 'jpeg' : ext}`;
+    const path = `${patientId}/${Date.now()}.${ext}`;
+    try {
+      const { error } = await supabase.storage.from(bucket).upload(path, file, { contentType, upsert: true });
+      if (error) return { error: error.message };
+      return { path };
+    } catch (e: any) {
+      return { error: 'Falha ao enviar a imagem: ' + (e?.message || 'erro') };
+    }
   }
+
+  // NATIVO: permissão de galeria + expo-image-picker.
+  const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+  if (!perm.granted) return { error: 'Permissão de galeria negada.' };
 
   let res: ImagePicker.ImagePickerResult;
   try {
     res = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
       quality: 0.7,
-      base64: Platform.OS !== 'web',
+      base64: true,
     });
   } catch (e: any) {
     return { error: 'Não foi possível abrir a galeria: ' + (e?.message || 'erro') };
@@ -55,17 +77,10 @@ export async function pickAndUpload(
   const path = `${patientId}/${Date.now()}.${ext}`;
 
   try {
-    let body: Blob | ArrayBuffer;
-    if (Platform.OS === 'web') {
-      // asset.uri é um blob:/data: URL — buscamos o binário direto.
-      const resp = await fetch(asset.uri);
-      body = await resp.blob();
-    } else {
-      const b64 =
-        (asset as any).base64 ??
-        (await FileSystem.readAsStringAsync(asset.uri, { encoding: FileSystem.EncodingType.Base64 }));
-      body = decode(b64);
-    }
+    const b64 =
+      (asset as any).base64 ??
+      (await FileSystem.readAsStringAsync(asset.uri, { encoding: FileSystem.EncodingType.Base64 }));
+    const body = decode(b64);
     const { error } = await supabase.storage
       .from(bucket)
       .upload(path, body as any, { contentType, upsert: true });
